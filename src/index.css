@@ -1,0 +1,130 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", Georgia, serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --color-canvas: #F4EFE6;
+  --color-surface: #FFFDF8;
+  --color-linen: #E8DFD2;
+  --color-ink: #1C1712;
+  --color-muted: #6B6258;
+  --color-copper: #C45C26;
+  --color-copper-dark: #9A4418;
+  --color-copper-soft: #F3E0D2;
+  --color-meadow: #2F7D57;
+  --color-meadow-soft: #E3F2EA;
+  --color-amber: #C9891A;
+  --color-amber-soft: #F8EED6;
+  --color-danger: #B42318;
+  --color-danger-soft: #F8E4E1;
+  --color-night: #161310;
+  --color-night-2: #231E19;
+  --color-night-3: #2F2923;
+  --color-mist: #F5F2EB;
+  --color-brandRed: #C45C26;
+  --color-ivory: #F4EFE6;
+  --color-charcoal: #161310;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    letter-spacing: -0.015em;
+    @apply bg-canvas text-ink antialiased h-screen w-screen m-0 p-0 overflow-hidden;
+  }
+
+  #root {
+    @apply h-full w-full;
+  }
+
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono, code, pre {
+    font-family: var(--font-mono);
+    letter-spacing: -0.02em;
+  }
+}
+
+@layer utilities {
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 8px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(28, 23, 18, 0.16);
+    border-radius: 99px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(28, 23, 18, 0.28);
+  }
+
+  .glass-panel {
+    background: color-mix(in srgb, var(--color-surface) 86%, transparent);
+    backdrop-filter: blur(18px);
+  }
+
+  /* 21st.dev Border Beam Animation */
+  @keyframes border-beam {
+    100% {
+      offset-distance: 100%;
+    }
+  }
+
+  .animate-border-beam {
+    animation: border-beam var(--duration, 10s) infinite linear;
+  }
+}
+
+/* Leaflet UI Customizations */
+.leaflet-control-zoom {
+  border: none !important;
+  box-shadow: 0 10px 30px rgba(28, 23, 18, 0.12) !important;
+  overflow: hidden;
+  border-radius: 14px !important;
+  margin: 0 !important;
+}
+
+.leaflet-top.leaflet-left {
+  top: auto;
+  left: auto;
+  right: 16px;
+  bottom: 16px;
+}
+
+.leaflet-control-zoom a {
+  background: #FFFDF8 !important;
+  color: #1C1712 !important;
+  border: none !important;
+  width: 40px !important;
+  height: 40px !important;
+  line-height: 40px !important;
+  font-size: 18px !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background: #F3E0D2 !important;
+}
+
+.custom-leaflet-popup .leaflet-popup-content-wrapper {
+  background: #FFFDF8 !important;
+  color: #1C1712 !important;
+  border-radius: 18px !important;
+  border: 1px solid #E8DFD2 !important;
+  box-shadow: 0 18px 40px rgba(28, 23, 18, 0.16) !important;
+  font-family: "Plus Jakarta Sans", sans-serif !important;
+}
+
+.custom-leaflet-popup .leaflet-popup-tip {
+  background: #FFFDF8 !important;
+}
+
+.leaflet-container {
+  font-family: "Plus Jakarta Sans", sans-serif;
+}
