@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 import {
   UsersThree, PawPrint, Cpu, Lightning, SignOut, Play, Pause, Path, MapPin, Check, X,
-  CheckCircle, Target, Power
+  CheckCircle, Target, Power, WarningOctagon
 } from '@phosphor-icons/react';
 import { auth, db } from '../firebase';
 import { telemetryThrottler } from '../utils/dbThrottler';
@@ -27,7 +27,7 @@ export default function AdminDashboard() {
 
   // Multi-Pet Failsafe Simulator States
   const [selectedPetIds, setSelectedPetIds] = useState([]);
-  const [movementPattern, setMovementPattern] = useState('breach'); // 'breach' | 'orbit' | 'wander'
+  const [movementPattern, setMovementPattern] = useState('wander'); // 'breach' | 'orbit' | 'wander'
   const [targetZoneId, setTargetZoneId] = useState('');
   const [placementOffset, setPlacementOffset] = useState('center'); // 'center' | 'inner' | 'edge'
   const [isSimulating, setIsSimulating] = useState(false);
@@ -104,7 +104,6 @@ export default function AdminDashboard() {
 
     for (const pet of activePets) {
       if (turnOn) {
-        // Send a fresh telemetry ping to immediately flip OwnerDashboard status to Live
         const currentCoord = simStateRef.current[pet.id_tag] || { lat: baseLat, lng: baseLng };
         telemetryThrottler.queueTelemetry(pet.id_tag, {
           lat: parseFloat(currentCoord.lat.toFixed(6)),
@@ -113,9 +112,9 @@ export default function AdminDashboard() {
           spo2: 98,
           battery: 95,
           status: 'online',
+          is_breached: false,
         });
       } else {
-        // Cut telemetry and set device offline
         await telemetryThrottler.setDeviceOffline(pet.id_tag);
       }
     }
@@ -173,7 +172,7 @@ export default function AdminDashboard() {
         zoneRadiusMeters,
         metersPerDegLat,
         metersPerDegLng,
-        isEscaping: true,
+        isEscaping: false,
       };
 
       telemetryThrottler.queueTelemetry(pet.id_tag, {
@@ -183,10 +182,45 @@ export default function AdminDashboard() {
         spo2: 98,
         battery: 95,
         status: 'online',
+        is_breached: false,
       });
     });
 
     toast.success(`Placed ${activePets.length} pet(s) into “${targetZone.name}”!`);
+  };
+
+  // Instant Breach / Physical Tamper: Shuts down the collar hardware immediately and alerts the owner
+  const handleTriggerInstantBreach = async () => {
+    if (selectedPetIds.length === 0) {
+      toast.error('Select at least one pet to trigger collar breach.');
+      return;
+    }
+
+    const activePets = allPets.filter((p) => selectedPetIds.includes(p.id) && p.id_tag);
+    if (activePets.length === 0) {
+      toast.error('Selected pets must have a Collar ID (id_tag) linked.');
+      return;
+    }
+
+    for (const pet of activePets) {
+      // 1. Force the device offline and mark the tamper/breach flag in Firestore
+      try {
+        await updateDoc(doc(db, 'devices', pet.id_tag), {
+          status: 'offline',
+          is_breached: true,
+          last_updated: new Date().toISOString(),
+        });
+      } catch (err) {
+        await telemetryThrottler.setDeviceOffline(pet.id_tag);
+      }
+
+      // 2. Clear from active simulator memory if running
+      if (simStateRef.current[pet.id_tag]) {
+        delete simStateRef.current[pet.id_tag];
+      }
+    }
+
+    toast.error(`Breach triggered: ${activePets.length} collar(s) forcefully shut down. Owner alerted.`);
   };
 
   const toggleSimulation = async () => {
@@ -237,7 +271,7 @@ export default function AdminDashboard() {
           zoneRadiusMeters,
           metersPerDegLat,
           metersPerDegLng,
-          isEscaping: true,
+          isEscaping: false,
         };
       });
 
@@ -303,6 +337,7 @@ export default function AdminDashboard() {
             spo2: dynamicSpo2,
             battery: 94,
             status: 'online',
+            is_breached: false,
           });
         });
       }, 4500);
@@ -535,25 +570,34 @@ export default function AdminDashboard() {
                         disabled={isSimulating}
                         className={field}
                       >
-                        <option value="breach">Safe Zone Breach (Smooth Walk-Out & Return)</option>
-                        <option value="orbit">Perimeter Orbit (Walks the fence boundary)</option>
                         <option value="wander">Realistic Wander (Safe exploratory walking)</option>
+                        <option value="orbit">Perimeter Orbit (Walks the fence boundary)</option>
+                        <option value="breach">Safe Zone Breach (Smooth Walk-Out & Return)</option>
                       </select>
                     </div>
                   </div>
 
                   <div className="flex justify-between items-center pt-2 border-t border-white/5 flex-wrap gap-2">
                     <span className="text-xs text-canvas/50">
-                      Snap selected pets straight into the active safe zone coordinates.
+                      Simulate physical tampering or snap pets into safe zones.
                     </span>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={handlePlaceInSafezone}
-                      className="!bg-white/10 !text-canvas hover:!bg-copper hover:!text-white !py-1.5 !px-3 !text-xs"
-                    >
-                      <Target size={15} weight="bold" /> Place Selected Pets in Zone
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={handlePlaceInSafezone}
+                        className="!bg-white/10 !text-canvas hover:!bg-copper hover:!text-white !py-1.5 !px-3 !text-xs"
+                      >
+                        <Target size={15} weight="bold" /> Place in Zone
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={handleTriggerInstantBreach}
+                        className="!bg-rose-600 hover:!bg-rose-700 !text-white !py-1.5 !px-3 !text-xs font-bold transition flex items-center gap-1.5"
+                      >
+                        <WarningOctagon size={15} weight="fill" /> Force Breach / Shutdown
+                      </Button>
+                    </div>
                   </div>
                 </div>
 

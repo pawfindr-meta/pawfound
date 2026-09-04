@@ -104,7 +104,9 @@ export default function OwnerDashboard() {
   const [isPlacingOnMap, setIsPlacingOnMap] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [alertsOpen, setAlertsOpen] = useState(false);
+
   const breachedPetsRef = useRef(new Set());
+  const prevDeviceStateRef = useRef({});
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   useEffect(() => {
@@ -165,6 +167,7 @@ export default function OwnerDashboard() {
             spo2: isDeviceOnline ? (data.spo2 ?? '--') : '--',
             battery: isDeviceOnline ? (data.battery ?? '--') : '--',
             status: isDeviceOnline ? 'online' : 'offline',
+            is_breached: Boolean(data.is_breached),
             lastPingTime: pingTimestamp,
           },
         }));
@@ -193,6 +196,7 @@ export default function OwnerDashboard() {
     return () => unsubs.forEach((unsub) => unsub());
   }, [pets, activePetId]);
 
+  // Safezone Boundary Breach Detection
   useEffect(() => {
     if (safezones.length === 0) return;
     pets.forEach((pet) => {
@@ -228,6 +232,43 @@ export default function OwnerDashboard() {
       }
     });
   }, [devicesData, pets, safezones]);
+
+  // Sudden Collar Shutdown / Forceful Removal Tamper Detection
+  useEffect(() => {
+    pets.forEach((pet) => {
+      if (!pet.id_tag) return;
+      const currentTelemetry = devicesData[pet.id_tag];
+      if (!currentTelemetry) return;
+
+      const previous = prevDeviceStateRef.current[pet.id_tag];
+      const isBreachedNow = currentTelemetry.is_breached;
+      const wasOnline = previous?.status === 'online';
+      const isNowOffline = currentTelemetry.status === 'offline';
+
+      // Trigger critical alert when status abruptly drops offline with a breach, or flips is_breached
+      if ((wasOnline && isNowOffline && isBreachedNow) || (!previous?.is_breached && isBreachedNow)) {
+        const item = {
+          id: Date.now() + Math.random(),
+          title: `CRITICAL: ${pet.name}'s collar breached!`,
+          message: `${pet.name}'s collar was forcefully removed, damaged, or powered down.`,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          type: 'alert',
+          read: false,
+        };
+
+        setNotifications((prev) => [item, ...prev]);
+        toast.error(item.title, {
+          description: item.message,
+          duration: 8000,
+        });
+      }
+
+      prevDeviceStateRef.current[pet.id_tag] = {
+        status: currentTelemetry.status,
+        is_breached: currentTelemetry.is_breached,
+      };
+    });
+  }, [devicesData, pets]);
 
   const handleUseCurrentLocation = () => {
     if (!navigator.geolocation) return toast.error('Location is not available in this browser.');
@@ -477,14 +518,32 @@ export default function OwnerDashboard() {
                   <Marker
                     key={pet.id}
                     position={[telemetry.lat, telemetry.lng]}
-                    icon={createPetMarkerIcon(selected, !safety.isSafe && !safety.unknown, signal)}
+                    icon={createPetMarkerIcon(selected, (!safety.isSafe && !safety.unknown) || telemetry.is_breached, signal)}
                     eventHandlers={{ click: () => { setActivePetId(pet.id); setFollowPet(true); } }}
                   >
                     <Popup className="custom-leaflet-popup">
                       <div className="text-sm p-1">
                         <strong className="text-copper">{pet.name}</strong>
-                        <div className={`mt-1 font-medium ${!signal ? 'text-muted' : (!safety.isSafe && !safety.unknown ? 'text-danger' : 'text-meadow')}`}>
-                          {!signal ? 'Collar is offline' : (!safety.isSafe && !safety.unknown ? 'Outside every zone' : safety.matchedZone ? `Inside ${safety.matchedZone.name}` : 'No zones yet')}
+                        <div className={`mt-1 font-medium ${
+                          telemetry.is_breached
+                            ? 'text-danger font-bold'
+                            : !signal
+                            ? 'text-muted'
+                            : !safety.isSafe && !safety.unknown
+                            ? 'text-danger'
+                            : safety.matchedZone
+                            ? 'text-meadow'
+                            : 'text-muted'
+                        }`}>
+                          {telemetry.is_breached
+                            ? 'Collar Tampered / Breached'
+                            : !signal
+                            ? 'Collar is offline'
+                            : !safety.isSafe && !safety.unknown
+                            ? 'Outside every zone'
+                            : safety.matchedZone
+                            ? `Inside ${safety.matchedZone.name}`
+                            : 'No zones yet'}
                         </div>
                       </div>
                     </Popup>
@@ -509,8 +568,8 @@ export default function OwnerDashboard() {
 
             <div className="absolute top-3 right-3 z-[1000] rounded-2xl border border-white/60 bg-surface/90 px-3 py-2 shadow-lg backdrop-blur-md">
               <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-ink">
-                <span className={`h-2 w-2 rounded-full ${live ? 'bg-meadow animate-pulse' : 'bg-muted'}`} />
-                {live ? 'Live location' : 'Location offline'}
+                <span className={`h-2 w-2 rounded-full ${live ? 'bg-meadow animate-pulse' : activeTelemetry?.is_breached ? 'bg-danger animate-ping' : 'bg-muted'}`} />
+                {activeTelemetry?.is_breached ? 'Tamper Alert' : live ? 'Live location' : 'Location offline'}
               </div>
               <div className="mt-0.5 max-w-[130px] truncate text-xs text-muted">
                 {activePet?.name || 'No pet selected'}
@@ -720,7 +779,7 @@ export default function OwnerDashboard() {
 
       <Modal open={alertsOpen} onClose={() => setAlertsOpen(false)} title="Alerts" subtitle="Live updates from collars and zones">
         {notifications.length === 0 ? (
-          <EmptyState icon={<Bell size={24} />} title="All quiet" body="You’ll see a toast here if a pet leaves a home zone." />
+          <EmptyState icon={<Bell size={24} />} title="All quiet" body="You’ll see a toast here if a pet leaves a home zone or a collar is breached." />
         ) : (
           <div className="flex flex-col gap-2">
             {notifications.map((n) => (
@@ -817,7 +876,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
     );
   }
 
-  const breached = !activeSafety.isSafe && !activeSafety.unknown;
+  const breached = (!activeSafety.isSafe && !activeSafety.unknown) || activeTelemetry?.is_breached;
   const spo2Tone = spo2Value && spo2Value < 94 ? 'danger' : 'meadow';
   const batTone = !live ? 'muted' : batteryValue < 20 ? 'danger' : 'meadow';
 
@@ -833,7 +892,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
           breached ? 'bg-danger-soft text-danger' : 'bg-meadow-soft text-meadow'
         }`}>
           {breached ? <WarningOctagon size={12} weight="fill" /> : <ShieldCheck size={12} weight="fill" />}
-          {breached ? 'Outside zones' : activeSafety.matchedZone ? activeSafety.matchedZone.name : 'No zones yet'}
+          {activeTelemetry?.is_breached ? 'Collar Breached' : breached ? 'Outside zones' : activeSafety.matchedZone ? activeSafety.matchedZone.name : 'No zones yet'}
         </span>
       </div>
       <div className={`flex items-center gap-2 text-xs mb-3 ${live ? 'text-meadow' : 'text-muted'}`}>
@@ -922,6 +981,8 @@ function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect,
           const petOnline = telemetry?.status === 'online' && telemetry?.lastPingTime != null && isLive(telemetry.lastPingTime, now);
           const safety = telemetry?.lat != null && petOnline ? checkPetSafety(telemetry.lat, telemetry.lng, safezones) : { isSafe: true, unknown: true };
           const selected = activePetId === pet.id;
+          const isBreached = telemetry?.is_breached;
+
           return (
             <div
               key={pet.id}
@@ -939,8 +1000,16 @@ function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect,
               </button>
               
               <div className="flex items-center gap-1.5">
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${!petOnline ? 'bg-night/10 text-muted' : (!safety.isSafe && !safety.unknown ? 'bg-danger/15 text-danger' : 'bg-meadow/15 text-meadow')}`}>
-                  {!petOnline ? 'OFF' : (!safety.isSafe && !safety.unknown ? 'OUT' : 'OK')}
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                  isBreached
+                    ? 'bg-danger text-white'
+                    : !petOnline
+                    ? 'bg-night/10 text-muted'
+                    : !safety.isSafe && !safety.unknown
+                    ? 'bg-danger/15 text-danger'
+                    : 'bg-meadow/15 text-meadow'
+                }`}>
+                  {isBreached ? 'BREACH' : !petOnline ? 'OFF' : (!safety.isSafe && !safety.unknown ? 'OUT' : 'OK')}
                 </span>
                 <button
                   type="button"
