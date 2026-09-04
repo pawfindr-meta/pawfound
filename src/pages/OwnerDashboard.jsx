@@ -26,7 +26,7 @@ function createPetMarkerIcon(isSelected, isBreached, hasSignal) {
   return L.divIcon({
     className: 'custom-pet-marker',
     html: `<div class="relative flex h-8 w-8 items-center justify-center">
-      <span class="${isBreached ? 'animate-ping' : ''} absolute inline-flex h-full w-full rounded-full opacity-70" style="background:${color}"></span>
+      <span class="${isBreached && hasSignal ? 'animate-ping' : ''} absolute inline-flex h-full w-full rounded-full opacity-70" style="background:${color}"></span>
       <span class="relative inline-flex rounded-full h-6 w-6 border-[3px] ${isSelected ? 'scale-125' : ''}" style="background:${color};border-color:#FFFDF8;box-shadow:0 0 0 2px ${color}40"></span>
     </div>`,
     iconSize: [32, 32],
@@ -108,7 +108,7 @@ export default function OwnerDashboard() {
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 10000);
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -119,10 +119,16 @@ export default function OwnerDashboard() {
       const petList = [];
       snapshot.forEach((docSnap) => petList.push({ id: docSnap.id, ...docSnap.data() }));
       setPets(petList);
-      if (petList.length > 0 && !activePetId) setActivePetId(petList[0].id);
+      if (petList.length > 0) {
+        if (!activePetId || !petList.some((p) => p.id === activePetId)) {
+          setActivePetId(petList[0].id);
+        }
+      } else {
+        setActivePetId(null);
+      }
     });
     return () => unsub();
-  }, [currentUser]);
+  }, [currentUser, activePetId]);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -147,19 +153,23 @@ export default function OwnerDashboard() {
         const lat = typeof data.lat === 'number' ? data.lat : null;
         const lng = typeof data.lng === 'number' ? data.lng : null;
 
+        const isDeviceOnline = data.status === 'online' && Boolean(data.last_updated);
+        const pingTimestamp = isDeviceOnline ? new Date(data.last_updated).getTime() : null;
+
         setDevicesData((prev) => ({
           ...prev,
           [pet.id_tag]: {
             lat,
             lng,
-            bpm: data.bpm ?? '--',
-            spo2: data.spo2 ?? '--',
-            battery: data.battery ?? '--',
-            lastPingTime: Date.now(),
+            bpm: isDeviceOnline ? (data.bpm ?? '--') : '--',
+            spo2: isDeviceOnline ? (data.spo2 ?? '--') : '--',
+            battery: isDeviceOnline ? (data.battery ?? '--') : '--',
+            status: isDeviceOnline ? 'online' : 'offline',
+            lastPingTime: pingTimestamp,
           },
         }));
 
-        if (lat != null && lng != null) {
+        if (isDeviceOnline && lat != null && lng != null) {
           setPositionTrails((prev) => {
             const currentTrail = prev[pet.id_tag] || [];
             const lastPos = currentTrail[currentTrail.length - 1];
@@ -171,8 +181,12 @@ export default function OwnerDashboard() {
         }
 
         if (activePet && pet.id_tag === activePet.id_tag) {
-          const timeString = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-          setBiometricHistory((prev) => [...prev, { time: timeString, bpm: data.bpm, spo2: data.spo2 }].slice(-20));
+          if (isDeviceOnline && data.bpm && data.spo2) {
+            const timeString = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            setBiometricHistory((prev) => [...prev, { time: timeString, bpm: data.bpm, spo2: data.spo2 }].slice(-20));
+          } else if (!isDeviceOnline) {
+            setBiometricHistory([]);
+          }
         }
       });
     });
@@ -183,7 +197,7 @@ export default function OwnerDashboard() {
     if (safezones.length === 0) return;
     pets.forEach((pet) => {
       const telemetry = devicesData[pet.id_tag];
-      if (!telemetry || telemetry.lat == null || telemetry.lng == null) return;
+      if (!telemetry || telemetry.status === 'offline' || telemetry.lat == null || telemetry.lng == null) return;
       const safety = checkPetSafety(telemetry.lat, telemetry.lng, safezones);
 
       if (!safety.isSafe && !breachedPetsRef.current.has(pet.id)) {
@@ -312,6 +326,33 @@ export default function OwnerDashboard() {
     }
   };
 
+  const handleDeletePet = async (petId, petName, idTag) => {
+    if (!currentUser?.uid) return;
+    if (!window.confirm(`Are you sure you want to remove “${petName}”? This cannot be undone.`)) return;
+
+    try {
+      await deleteDoc(doc(db, 'pets', petId));
+      
+      breachedPetsRef.current.delete(petId);
+      if (idTag) {
+        setPositionTrails((prev) => {
+          const updated = { ...prev };
+          delete updated[idTag];
+          return updated;
+        });
+        setDevicesData((prev) => {
+          const updated = { ...prev };
+          delete updated[idTag];
+          return updated;
+        });
+      }
+
+      toast.success(`${petName} removed`);
+    } catch (err) {
+      toast.error(formatAuthError(err));
+    }
+  };
+
   const markAlertsRead = () => {
     setAlertsOpen(true);
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
@@ -327,10 +368,13 @@ export default function OwnerDashboard() {
     ? [activeTelemetry.lat, activeTelemetry.lng]
     : (safezones[0] ? [safezones[0].lat, safezones[0].lng] : DEFAULT_MAP_CENTER);
 
-  const bpmValue = parseFloat(activeTelemetry?.bpm) || 0;
-  const spo2Value = parseFloat(activeTelemetry?.spo2) || 0;
-  const batteryValue = parseFloat(activeTelemetry?.battery) || 0;
-  const live = isLive(activeTelemetry?.lastPingTime, now);
+  // Single source of truth for online/offline state
+  const isCollarOnline = activeTelemetry?.status === 'online' && activeTelemetry?.lastPingTime != null;
+  const live = isCollarOnline && isLive(activeTelemetry?.lastPingTime, now);
+
+  const bpmValue = live ? (parseFloat(activeTelemetry?.bpm) || 0) : 0;
+  const spo2Value = live ? (parseFloat(activeTelemetry?.spo2) || 0) : 0;
+  const batteryValue = live ? (parseFloat(activeTelemetry?.battery) || 0) : 0;
 
   const navItems = [
     { id: 'home', icon: House, label: 'Home' },
@@ -406,9 +450,9 @@ export default function OwnerDashboard() {
 
             <MapContainer center={mapCenter} zoom={15} style={{ height: '100%', width: '100%', minHeight: 280 }}>
               <TileLayer 
-  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" 
-  attribution="&copy; OpenStreetMap contributors" 
-/>
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" 
+                attribution="&copy; OpenStreetMap contributors" 
+              />
               <MapUpdater center={mapCenter} follow={followPet && !isPlacingOnMap} />
               <MapClickHandler isPlacingMode={isPlacingOnMap} onMapClick={handleMapPinSelected} />
 
@@ -425,9 +469,10 @@ export default function OwnerDashboard() {
               {pets.map((pet) => {
                 const telemetry = devicesData[pet.id_tag];
                 if (telemetry?.lat == null || telemetry?.lng == null) return null;
+                const petOnline = telemetry.status === 'online' && telemetry.lastPingTime != null;
                 const safety = checkPetSafety(telemetry.lat, telemetry.lng, safezones);
                 const selected = activePetId === pet.id;
-                const signal = isLive(telemetry.lastPingTime, now);
+                const signal = petOnline && isLive(telemetry.lastPingTime, now);
                 return (
                   <Marker
                     key={pet.id}
@@ -438,8 +483,8 @@ export default function OwnerDashboard() {
                     <Popup className="custom-leaflet-popup">
                       <div className="text-sm p-1">
                         <strong className="text-copper">{pet.name}</strong>
-                        <div className={`mt-1 font-medium ${!safety.isSafe && !safety.unknown ? 'text-danger' : 'text-meadow'}`}>
-                          {!safety.isSafe && !safety.unknown ? 'Outside every zone' : safety.matchedZone ? `Inside ${safety.matchedZone.name}` : 'No zones yet'}
+                        <div className={`mt-1 font-medium ${!signal ? 'text-muted' : (!safety.isSafe && !safety.unknown ? 'text-danger' : 'text-meadow')}`}>
+                          {!signal ? 'Collar is offline' : (!safety.isSafe && !safety.unknown ? 'Outside every zone' : safety.matchedZone ? `Inside ${safety.matchedZone.name}` : 'No zones yet')}
                         </div>
                       </div>
                     </Popup>
@@ -496,7 +541,15 @@ export default function OwnerDashboard() {
               biometricHistory={biometricHistory}
               onAdd={() => setIsAddPetModalOpen(true)}
             />
-            <PetListCard pets={pets} activePetId={activePetId} devicesData={devicesData} safezones={safezones} now={now} onSelect={setActivePetId} />
+            <PetListCard 
+              pets={pets} 
+              activePetId={activePetId} 
+              devicesData={devicesData} 
+              safezones={safezones} 
+              now={now} 
+              onSelect={setActivePetId} 
+              onDelete={handleDeletePet} 
+            />
           </div>
         </div>
       </div>
@@ -531,15 +584,28 @@ export default function OwnerDashboard() {
             ) : (
               <div className="flex flex-col gap-2">
                 {pets.map((p) => (
-                  <button
+                  <div
                     key={p.id}
-                    onClick={() => { setActivePetId(p.id); setPanel('home'); setFollowPet(true); }}
-                    className="text-left bg-canvas border border-linen rounded-2xl p-4 hover:border-copper/40 transition"
+                    className="flex items-center justify-between bg-canvas border border-linen rounded-2xl p-4 hover:border-copper/40 transition gap-2"
                   >
-                    <div className="font-semibold">{p.name}</div>
-                    <div className="text-sm text-muted">{p.type} · {p.breed || 'Mixed'} · {p.age} yrs</div>
-                    <div className="text-xs text-copper mt-1">{p.id_tag ? `Collar ${p.id_tag}` : 'No collar linked yet'}</div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => { setActivePetId(p.id); setPanel('home'); setFollowPet(true); }}
+                      className="text-left flex-1"
+                    >
+                      <div className="font-semibold">{p.name}</div>
+                      <div className="text-sm text-muted">{p.type} · {p.breed || 'Mixed'} · {p.age} yrs</div>
+                      <div className="text-xs text-copper mt-1">{p.id_tag ? `Collar ${p.id_tag}` : 'No collar linked yet'}</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePet(p.id, p.name, p.id_tag)}
+                      className="p-2.5 text-muted hover:text-danger hover:bg-danger-soft rounded-xl transition"
+                      title={`Remove ${p.name}`}
+                    >
+                      <Trash size={18} />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -753,7 +819,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
 
   const breached = !activeSafety.isSafe && !activeSafety.unknown;
   const spo2Tone = spo2Value && spo2Value < 94 ? 'danger' : 'meadow';
-  const batTone = batteryValue && batteryValue < 20 ? 'danger' : 'meadow';
+  const batTone = !live ? 'muted' : batteryValue < 20 ? 'danger' : 'meadow';
 
   return (
     <div className="flex-none bg-surface border border-linen rounded-[28px] p-4 flex flex-col overflow-hidden">
@@ -783,7 +849,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
           </div>
           <span className="font-mono text-[10px] text-canvas/50">BPM / SpO2</span>
         </div>
-        {biometricHistory.length > 1 ? (
+        {live && biometricHistory.length > 1 ? (
           <div className="h-20">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={biometricHistory} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
@@ -809,20 +875,40 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
           </div>
         ) : (
           <div className="flex h-20 items-center justify-center rounded-xl border border-dashed border-canvas/20 text-xs text-canvas/55">
-            Waiting for more live readings
+            Collar is offline
           </div>
         )}
       </div>
       <div className="flex flex-col gap-2">
-        <MetricRow icon={<Heartbeat size={16} className="text-copper" />} label="Heart rate" value={activeTelemetry?.bpm ?? '--'} unit="BPM" percent={(bpmValue / 200) * 100} />
-        <MetricRow icon={<Drop size={16} className="text-meadow" />} label="Blood oxygen" value={activeTelemetry?.spo2 ?? '--'} unit="%" percent={spo2Value} tone={spo2Tone} />
-        <MetricRow icon={<BatteryCharging size={16} className="text-meadow" />} label="Collar battery" value={activeTelemetry?.battery ?? '--'} unit="%" percent={batteryValue} tone={batTone} />
+        <MetricRow 
+          icon={<Heartbeat size={16} className="text-copper" />} 
+          label="Heart rate" 
+          value={live ? (activeTelemetry?.bpm ?? '--') : '--'} 
+          unit={live ? 'BPM' : ''} 
+          percent={live ? (bpmValue / 200) * 100 : 0} 
+        />
+        <MetricRow 
+          icon={<Drop size={16} className="text-meadow" />} 
+          label="Blood oxygen" 
+          value={live ? (activeTelemetry?.spo2 ?? '--') : '--'} 
+          unit={live ? '%' : ''} 
+          percent={live ? spo2Value : 0} 
+          tone={spo2Tone} 
+        />
+        <MetricRow 
+          icon={<BatteryCharging size={16} className="text-meadow" />} 
+          label="Collar battery" 
+          value={live ? (activeTelemetry?.battery ?? '--') : '--'} 
+          unit={live ? '%' : ''} 
+          percent={live ? batteryValue : 0} 
+          tone={batTone} 
+        />
       </div>
     </div>
   );
 }
 
-function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect }) {
+function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect, onDelete }) {
   return (
     <div className="flex-1 min-h-0 bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
       <div className="flex justify-between mb-3">
@@ -833,24 +919,46 @@ function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect 
         {pets.length === 0 && <p className="text-sm text-muted">Your pets will show up here.</p>}
         {pets.map((pet) => {
           const telemetry = devicesData[pet.id_tag];
-          const safety = telemetry?.lat != null ? checkPetSafety(telemetry.lat, telemetry.lng, safezones) : { isSafe: true, unknown: true };
+          const petOnline = telemetry?.status === 'online' && telemetry?.lastPingTime != null && isLive(telemetry.lastPingTime, now);
+          const safety = telemetry?.lat != null && petOnline ? checkPetSafety(telemetry.lat, telemetry.lng, safezones) : { isSafe: true, unknown: true };
           const selected = activePetId === pet.id;
           return (
-            <button
+            <div
               key={pet.id}
-              onClick={() => onSelect(pet.id)}
-              className={`p-3 rounded-2xl border text-left transition ${selected ? 'bg-night text-canvas border-night' : 'bg-canvas border-linen hover:border-copper/40'}`}
+              className={`p-3 rounded-2xl border flex items-center justify-between transition gap-2 ${
+                selected ? 'bg-night text-canvas border-night' : 'bg-canvas border-linen hover:border-copper/40'
+              }`}
             >
-              <div className="flex justify-between items-center">
-                <div>
-                  <div className="font-semibold text-sm">{pet.name}</div>
-                  <div className={`text-xs ${selected ? 'text-canvas/60' : 'text-muted'}`}>{pet.type} · {formatLastSeen(telemetry?.lastPingTime, now)}</div>
-                </div>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${!safety.isSafe && !safety.unknown ? 'bg-danger/15 text-danger' : 'bg-meadow/15 text-meadow'}`}>
-                  {!safety.isSafe && !safety.unknown ? 'OUT' : 'OK'}
+              <button
+                type="button"
+                onClick={() => onSelect(pet.id)}
+                className="flex-1 text-left"
+              >
+                <div className="font-semibold text-sm">{pet.name}</div>
+                <div className={`text-xs ${selected ? 'text-canvas/60' : 'text-muted'}`}>{pet.type} · {formatLastSeen(telemetry?.lastPingTime, now)}</div>
+              </button>
+              
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${!petOnline ? 'bg-night/10 text-muted' : (!safety.isSafe && !safety.unknown ? 'bg-danger/15 text-danger' : 'bg-meadow/15 text-meadow')}`}>
+                  {!petOnline ? 'OFF' : (!safety.isSafe && !safety.unknown ? 'OUT' : 'OK')}
                 </span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(pet.id, pet.name, pet.id_tag);
+                  }}
+                  className={`p-1.5 rounded-lg transition ${
+                    selected 
+                      ? 'text-canvas/50 hover:text-danger hover:bg-white/10' 
+                      : 'text-muted hover:text-danger hover:bg-danger-soft'
+                  }`}
+                  title={`Remove ${pet.name}`}
+                >
+                  <Trash size={15} />
+                </button>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
