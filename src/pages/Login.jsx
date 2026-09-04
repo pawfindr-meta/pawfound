@@ -89,9 +89,9 @@ export default function Login() {
   };
 
   return (
-    <div className="relative flex min-h-screen w-screen items-center justify-center p-4 bg-night overflow-auto">
+    <div className="relative flex min-h-[100dvh] w-full items-center justify-center p-4 sm:p-6 bg-night overflow-y-auto">
       {/* Faulty Terminal Animated Background */}
-      <div className="fixed inset-0 z-0 flex items-center justify-center pointer-events-auto">
+      <div className="fixed inset-0 z-0 flex items-center justify-center pointer-events-none">
         <div style={{ width: '100%', height: '100%', position: 'relative' }}>
           <FaultyTerminal
             scale={2.4}
@@ -113,7 +113,7 @@ export default function Login() {
 
       <motion.div
         layout
-        className={`relative z-10 w-full ${isLogin ? 'max-w-[420px]' : 'max-w-3xl'} bg-night/80 backdrop-blur-xl text-canvas border border-white/10 rounded-[32px] shadow-[0_30px_80px_rgba(0,0,0,0.45)] p-6 md:p-8`}
+        className={`relative z-10 w-full ${isLogin ? 'max-w-[420px]' : 'max-w-3xl'} bg-night/85 backdrop-blur-xl text-canvas border border-white/10 rounded-[32px] shadow-[0_30px_80px_rgba(0,0,0,0.45)] p-6 sm:p-8 my-auto`}
       >
         <div className="flex items-center justify-center gap-2 mb-2">
           <span className="w-9 h-9 rounded-2xl bg-copper text-white flex items-center justify-center">
@@ -168,7 +168,7 @@ export default function Login() {
           </AnimatePresence>
 
           {!isLogin ? (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               <Field label="First name">
                 <input value={firstName} onChange={(e) => setFirstName(e.target.value)} required className={fieldClass} />
               </Field>

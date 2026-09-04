@@ -245,7 +245,6 @@ export default function OwnerDashboard() {
       const wasOnline = previous?.status === 'online';
       const isNowOffline = currentTelemetry.status === 'offline';
 
-      // Trigger critical alert when status abruptly drops offline with a breach, or flips is_breached
       if ((wasOnline && isNowOffline && isBreachedNow) || (!previous?.is_breached && isBreachedNow)) {
         const item = {
           id: Date.now() + Math.random(),
@@ -409,7 +408,6 @@ export default function OwnerDashboard() {
     ? [activeTelemetry.lat, activeTelemetry.lng]
     : (safezones[0] ? [safezones[0].lat, safezones[0].lng] : DEFAULT_MAP_CENTER);
 
-  // Single source of truth for online/offline state
   const isCollarOnline = activeTelemetry?.status === 'online' && activeTelemetry?.lastPingTime != null;
   const live = isCollarOnline && isLive(activeTelemetry?.lastPingTime, now);
 
@@ -425,7 +423,7 @@ export default function OwnerDashboard() {
   ];
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-canvas text-ink overflow-hidden">
+    <div className="flex flex-col min-h-[100dvh] w-full bg-canvas text-ink lg:h-[100dvh] lg:overflow-hidden pb-16 md:pb-0">
       <header className="flex justify-between items-center px-4 py-3 shrink-0 z-20 bg-surface/80 border-b border-linen backdrop-blur-md">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-2xl bg-copper text-white flex items-center justify-center shadow-sm">
@@ -458,7 +456,8 @@ export default function OwnerDashboard() {
         </div>
       </header>
 
-      <div className="flex-1 flex min-h-0 px-3 py-3 gap-3">
+      <div className="flex-1 flex min-h-0 px-3 py-3 gap-3 overflow-y-auto lg:overflow-hidden">
+        {/* Desktop Sidebar */}
         <aside className="hidden md:flex bg-night text-canvas p-2 rounded-[22px] flex-col gap-2 items-center shrink-0 w-[68px] shadow-lg shadow-night/10">
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -479,8 +478,10 @@ export default function OwnerDashboard() {
           </button>
         </aside>
 
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-3 min-h-0">
-          <div className="lg:col-span-2 bg-night rounded-[28px] overflow-hidden relative min-h-[320px] h-full shadow-lg shadow-night/10">
+        {/* Main Content Grid: Stacks vertically on mobile/tablet, side-by-side on desktop */}
+        <div className="flex-1 flex flex-col lg:grid lg:grid-cols-3 gap-3 min-h-0">
+          {/* Map Column */}
+          <div className="w-full h-[380px] sm:h-[440px] lg:h-full lg:col-span-2 bg-night rounded-[28px] overflow-hidden relative shadow-lg shadow-night/10 shrink-0 lg:shrink">
             {isPlacingOnMap && (
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[2000] bg-copper text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-sm font-semibold">
                 <Target size={18} weight="bold" />
@@ -489,7 +490,7 @@ export default function OwnerDashboard() {
               </div>
             )}
 
-            <MapContainer center={mapCenter} zoom={15} style={{ height: '100%', width: '100%', minHeight: 280 }}>
+            <MapContainer center={mapCenter} zoom={15} style={{ height: '100%', width: '100%' }}>
               <TileLayer 
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" 
                 attribution="&copy; OpenStreetMap contributors" 
@@ -587,7 +588,8 @@ export default function OwnerDashboard() {
             </button>
           </div>
 
-          <div className="hidden lg:flex lg:col-span-1 h-full min-h-0 flex-col gap-3">
+          {/* Details & Telemetry Column */}
+          <div className="flex lg:col-span-1 min-h-0 flex-col gap-3">
             <HealthCard
               activePet={activePet}
               activeTelemetry={activeTelemetry}
@@ -613,7 +615,8 @@ export default function OwnerDashboard() {
         </div>
       </div>
 
-      <nav className="md:hidden flex items-center justify-around px-2 py-2 bg-surface border-t border-linen shadow-[0_-8px_24px_rgba(28,23,18,0.06)]">
+      {/* Mobile Fixed Bottom Navigation Bar */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 flex items-center justify-around px-2 py-2 bg-surface border-t border-linen shadow-[0_-8px_24px_rgba(28,23,18,0.08)]">
         {navItems.map((item) => {
           const Icon = item.icon;
           const active = panel === item.id;
@@ -674,7 +677,7 @@ export default function OwnerDashboard() {
         {panel === 'health' && (
           <SlidePanel title="Health stream" subtitle={activePet?.name} onClose={() => setPanel('home')} wide>
             {biometricHistory.length > 0 ? (
-              <div className="h-[48vh] bg-canvas rounded-2xl p-3 border border-linen">
+              <div className="h-[48vh] min-h-[220px] bg-canvas rounded-2xl p-3 border border-linen">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={biometricHistory} margin={{ top: 12, right: 12, left: -20, bottom: 0 }}>
                     <defs>
@@ -865,7 +868,7 @@ function SlidePanel({ title, subtitle, onClose, children, wide }) {
 function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmValue, spo2Value, batteryValue, biometricHistory, onAdd }) {
   if (!activePet) {
     return (
-      <div className="flex-1 bg-surface border border-linen rounded-[28px] p-4">
+      <div className="flex-none bg-surface border border-linen rounded-[28px] p-4">
         <EmptyState
           icon={<PawPrint size={24} weight="fill" />}
           title="No pets yet"
@@ -881,7 +884,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
   const batTone = !live ? 'muted' : batteryValue < 20 ? 'danger' : 'meadow';
 
   return (
-    <div className="flex-none bg-surface border border-linen rounded-[28px] p-4 flex flex-col overflow-hidden">
+    <div className="flex-none bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
       <div className="flex justify-between items-start mb-3">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-muted">Selected pet</div>
@@ -969,7 +972,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
 
 function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect, onDelete }) {
   return (
-    <div className="flex-1 min-h-0 bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
+    <div className="flex-1 min-h-[220px] bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
       <div className="flex justify-between mb-3">
         <h3 className="text-sm font-semibold">Family</h3>
         <span className="text-xs text-muted">{pets.length} registered</span>
