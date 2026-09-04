@@ -233,7 +233,7 @@ export default function OwnerDashboard() {
     });
   }, [devicesData, pets, safezones]);
 
-  // Sudden Collar Shutdown / Forceful Removal Tamper Detection
+  // Collar Shutdown / Forceful Removal Tamper Detection
   useEffect(() => {
     pets.forEach((pet) => {
       if (!pet.id_tag) return;
@@ -423,8 +423,8 @@ export default function OwnerDashboard() {
   ];
 
   return (
-    <div className="flex flex-col min-h-[100dvh] w-full bg-canvas text-ink lg:h-[100dvh] lg:overflow-hidden pb-16 md:pb-0">
-      <header className="flex justify-between items-center px-4 py-3 shrink-0 z-20 bg-surface/80 border-b border-linen backdrop-blur-md">
+    <div className="flex flex-col min-h-dvh w-full bg-canvas text-ink lg:h-dvh lg:overflow-hidden pb-24 md:pb-0">
+      <header className="flex justify-between items-center px-4 py-3 shrink-0 z-20 bg-surface/80 border-b border-linen backdrop-blur-md sticky top-0 md:static">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-2xl bg-copper text-white flex items-center justify-center shadow-sm">
             <PawPrint size={18} weight="fill" />
@@ -456,7 +456,7 @@ export default function OwnerDashboard() {
         </div>
       </header>
 
-      <div className="flex-1 flex min-h-0 px-3 py-3 gap-3 overflow-y-auto lg:overflow-hidden">
+      <div className="flex-1 flex min-h-0 px-3 py-3 gap-3 overflow-y-visible lg:overflow-hidden">
         {/* Desktop Sidebar */}
         <aside className="hidden md:flex bg-night text-canvas p-2 rounded-[22px] flex-col gap-2 items-center shrink-0 w-[68px] shadow-lg shadow-night/10">
           {navItems.map((item) => {
@@ -478,7 +478,7 @@ export default function OwnerDashboard() {
           </button>
         </aside>
 
-        {/* Main Content Grid: Stacks vertically on mobile/tablet, side-by-side on desktop */}
+        {/* Main Content Grid: Stacks on mobile, side-by-side on desktop */}
         <div className="flex-1 flex flex-col lg:grid lg:grid-cols-3 gap-3 min-h-0">
           {/* Map Column */}
           <div className="w-full h-[380px] sm:h-[440px] lg:h-full lg:col-span-2 bg-night rounded-[28px] overflow-hidden relative shadow-lg shadow-night/10 shrink-0 lg:shrink">
@@ -615,8 +615,8 @@ export default function OwnerDashboard() {
         </div>
       </div>
 
-      {/* Mobile Fixed Bottom Navigation Bar */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 flex items-center justify-around px-2 py-2 bg-surface border-t border-linen shadow-[0_-8px_24px_rgba(28,23,18,0.08)]">
+      {/* Mobile Fixed Bottom Navigation Bar with Safe-Area Padding */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around px-2 py-2.5 pb-[max(0.6rem,env(safe-area-inset-bottom))] bg-surface/95 backdrop-blur-md border-t border-linen shadow-[0_-8px_24px_rgba(28,23,18,0.08)]">
         {navItems.map((item) => {
           const Icon = item.icon;
           const active = panel === item.id;

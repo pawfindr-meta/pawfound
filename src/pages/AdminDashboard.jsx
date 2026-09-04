@@ -359,9 +359,9 @@ export default function AdminDashboard() {
   const field = 'w-full bg-night-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-canvas outline-none focus:border-copper';
 
   return (
-    <div className="flex flex-col md:flex-row min-h-[100dvh] w-full bg-canvas text-ink lg:h-[100dvh] lg:overflow-hidden p-2.5 sm:p-3 gap-3">
-      {/* Sidebar: Horizontal strip on mobile, vertical aside on tablet/desktop */}
-      <aside className="bg-night text-canvas p-2 rounded-[22px] flex flex-row md:flex-col gap-2 items-center justify-between md:justify-start shrink-0 w-full md:w-[72px]">
+    <div className="flex flex-col md:flex-row min-h-dvh w-full bg-canvas text-ink lg:h-dvh lg:overflow-hidden p-2.5 sm:p-3 gap-3 pb-24 md:pb-3">
+      {/* Sidebar */}
+      <aside className="bg-night text-canvas p-2 rounded-[22px] flex flex-row md:flex-col gap-2 items-center justify-between md:justify-start shrink-0 w-full md:w-[72px] sticky top-0 z-30 md:static">
         <div className="w-auto md:w-full pb-0 md:pb-2 border-b-0 md:border-b border-white/10 text-center pt-0 md:pt-1 px-2 md:px-0 flex items-center md:flex-col">
           <span className="font-display text-lg">P<span className="text-copper">F</span></span>
           <p className="text-[9px] text-copper font-bold uppercase tracking-wider ml-1.5 md:ml-0">Admin</p>
@@ -391,7 +391,7 @@ export default function AdminDashboard() {
       </aside>
 
       {/* Main Workspace */}
-      <main className="flex-1 flex flex-col gap-3 min-h-0 overflow-y-auto lg:overflow-hidden">
+      <main className="flex-1 flex flex-col gap-3 min-h-0 overflow-y-visible lg:overflow-y-auto">
         <header className="flex justify-between items-center bg-surface border border-linen px-4 py-3 rounded-[22px] shrink-0">
           <div>
             <h2 className="font-display text-lg">Operations & Failsafe Controller</h2>
@@ -415,7 +415,7 @@ export default function AdminDashboard() {
             key={activeView}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            className="lg:col-span-2 bg-night text-canvas rounded-[28px] p-4 sm:p-5 flex flex-col overflow-hidden min-h-[500px] lg:min-h-0"
+            className="lg:col-span-2 bg-night text-canvas rounded-[28px] p-4 sm:p-5 flex flex-col overflow-visible lg:overflow-hidden min-h-0"
           >
             {activeView === 'approvals' && (
               <>
@@ -476,7 +476,7 @@ export default function AdminDashboard() {
             )}
 
             {activeView === 'devices' && (
-              <div className="flex-1 flex items-center justify-center">
+              <div className="flex-1 flex items-center justify-center py-8">
                 <EmptyState
                   inverted
                   icon={<Cpu size={28} weight="duotone" />}
@@ -599,13 +599,13 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                {/* Grouped Pet Selector: Allowed to scroll gracefully */}
-                <div className="flex-1 flex flex-col min-h-[220px] overflow-hidden">
+                {/* Grouped Pet Selector: Natural scrolling on mobile, contained on desktop */}
+                <div className="flex flex-col min-h-0 lg:flex-1 lg:overflow-hidden pb-4 lg:pb-0">
                   <span className="text-xs font-semibold text-copper mb-2 flex items-center gap-1 shrink-0">
                     <PawPrint size={14} /> Select Pets (Categorized by Owner)
                   </span>
 
-                  <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-3 pr-1">
+                  <div className="flex-1 overflow-y-visible lg:overflow-y-auto custom-scrollbar flex flex-col gap-3 pr-1">
                     {owners.map((owner) => {
                       const ownerPets = allPets.filter(
                         (p) => (p.owner_id === owner.id || p.user_id === owner.id) && p.id_tag

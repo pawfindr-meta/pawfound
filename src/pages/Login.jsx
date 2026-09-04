@@ -89,7 +89,7 @@ export default function Login() {
   };
 
   return (
-    <div className="relative flex min-h-[100dvh] w-full items-center justify-center p-4 sm:p-6 bg-night overflow-y-auto">
+    <div className="relative flex min-h-dvh w-full items-center justify-center p-4 sm:p-6 py-8 md:py-6 bg-night overflow-y-auto">
       {/* Faulty Terminal Animated Background */}
       <div className="fixed inset-0 z-0 flex items-center justify-center pointer-events-none">
         <div style={{ width: '100%', height: '100%', position: 'relative' }}>
