@@ -359,9 +359,9 @@ export default function AdminDashboard() {
   const field = 'w-full bg-night-2 border border-white/10 rounded-xl px-3 py-2 text-sm text-canvas outline-none focus:border-copper';
 
   return (
-    <div className="flex flex-col md:flex-row min-h-dvh w-full bg-canvas text-ink lg:h-dvh lg:overflow-hidden p-2.5 sm:p-3 gap-3 pb-24 md:pb-3">
-      {/* Sidebar */}
-      <aside className="bg-night text-canvas p-2 rounded-[22px] flex flex-row md:flex-col gap-2 items-center justify-between md:justify-start shrink-0 w-full md:w-[72px] sticky top-0 z-30 md:static">
+    <div className="w-full min-h-screen bg-canvas text-ink lg:h-screen lg:overflow-hidden flex flex-col md:flex-row p-2.5 sm:p-3 gap-3">
+      {/* Top Header / Sidebar */}
+      <aside className="bg-night text-canvas p-2 rounded-[22px] flex flex-row md:flex-col gap-2 items-center justify-between md:justify-start shrink-0 w-full md:w-[72px] z-30">
         <div className="w-auto md:w-full pb-0 md:pb-2 border-b-0 md:border-b border-white/10 text-center pt-0 md:pt-1 px-2 md:px-0 flex items-center md:flex-col">
           <span className="font-display text-lg">P<span className="text-copper">F</span></span>
           <p className="text-[9px] text-copper font-bold uppercase tracking-wider ml-1.5 md:ml-0">Admin</p>
@@ -390,8 +390,8 @@ export default function AdminDashboard() {
         </button>
       </aside>
 
-      {/* Main Workspace */}
-      <main className="flex-1 flex flex-col gap-3 min-h-0 overflow-y-visible lg:overflow-y-auto">
+      {/* Main Workspace: Full page scroll on mobile, contained grid on desktop */}
+      <main className="flex-1 w-full flex flex-col gap-3 pb-28 md:pb-0 overflow-y-visible lg:overflow-y-auto min-h-0">
         <header className="flex justify-between items-center bg-surface border border-linen px-4 py-3 rounded-[22px] shrink-0">
           <div>
             <h2 className="font-display text-lg">Operations & Failsafe Controller</h2>
@@ -410,12 +410,12 @@ export default function AdminDashboard() {
           </div>
         </header>
 
-        <div className="flex-1 flex flex-col lg:grid lg:grid-cols-3 gap-3 min-h-0">
+        <div className="flex-1 flex flex-col lg:grid lg:grid-cols-3 gap-3">
           <motion.div
             key={activeView}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            className="lg:col-span-2 bg-night text-canvas rounded-[28px] p-4 sm:p-5 flex flex-col overflow-visible lg:overflow-hidden min-h-0"
+            className="lg:col-span-2 bg-night text-canvas rounded-[28px] p-4 sm:p-5 flex flex-col h-auto lg:h-full lg:overflow-hidden"
           >
             {activeView === 'approvals' && (
               <>
@@ -426,7 +426,7 @@ export default function AdminDashboard() {
                 {owners.length === 0 ? (
                   <EmptyState inverted title="No owner accounts yet" body="New registrations will land here for review." />
                 ) : (
-                  <div className="flex-1 overflow-auto custom-scrollbar flex flex-col gap-2">
+                  <div className="flex flex-col gap-2 lg:overflow-y-auto custom-scrollbar">
                     {owners.map((owner) => (
                       <div key={owner.id} className="bg-night-2 border border-white/8 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
                         <div>
@@ -462,7 +462,7 @@ export default function AdminDashboard() {
                 {allPets.length === 0 ? (
                   <EmptyState inverted title="No pets yet" body="Pets appear here once owners register them." />
                 ) : (
-                  <div className="flex-1 overflow-auto custom-scrollbar flex flex-col gap-2">
+                  <div className="flex flex-col gap-2 lg:overflow-y-auto custom-scrollbar">
                     {allPets.map((pet) => (
                       <div key={pet.id} className="bg-night-2 border border-white/8 rounded-2xl p-4">
                         <div className="font-semibold text-copper">{pet.name}</div>
@@ -476,7 +476,7 @@ export default function AdminDashboard() {
             )}
 
             {activeView === 'devices' && (
-              <div className="flex-1 flex items-center justify-center py-8">
+              <div className="py-12 flex items-center justify-center">
                 <EmptyState
                   inverted
                   icon={<Cpu size={28} weight="duotone" />}
@@ -487,8 +487,8 @@ export default function AdminDashboard() {
             )}
 
             {activeView === 'simulator' && (
-              <div className="flex-1 flex flex-col gap-3.5 min-h-0">
-                <div className="flex justify-between items-center flex-wrap gap-2 shrink-0">
+              <div className="flex flex-col gap-4">
+                <div className="flex justify-between items-center flex-wrap gap-2">
                   <div>
                     <h3 className="font-display text-lg">Failsafe Simulator</h3>
                     <p className="text-xs text-canvas/50">Simulate motion, control power states, and place pets into zones (4.5s intervals).</p>
@@ -505,7 +505,7 @@ export default function AdminDashboard() {
                 </div>
 
                 {/* Instant Collar Power Trigger Strip */}
-                <div className="bg-night-2 border border-white/8 rounded-2xl p-3 flex items-center justify-between flex-wrap gap-2 shrink-0">
+                <div className="bg-night-2 border border-white/8 rounded-2xl p-3.5 flex items-center justify-between flex-wrap gap-3">
                   <div className="flex items-center gap-2">
                     <Power size={18} className="text-copper shrink-0" />
                     <div>
@@ -513,18 +513,18 @@ export default function AdminDashboard() {
                       <div className="text-[11px] text-canvas/50">Immediately sets collar status to Live or Offline on Owner Dashboard</div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 w-full sm:w-auto">
                     <button
                       type="button"
                       onClick={() => handleSetCollarPower(true)}
-                      className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-meadow/20 text-meadow hover:bg-meadow hover:text-night transition"
+                      className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl text-xs font-semibold bg-meadow/20 text-meadow hover:bg-meadow hover:text-night transition"
                     >
                       Turn Collar ON
                     </button>
                     <button
                       type="button"
                       onClick={() => handleSetCollarPower(false)}
-                      className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-rose-500/20 text-rose-400 hover:bg-rose-600 hover:text-white transition"
+                      className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl text-xs font-semibold bg-rose-500/20 text-rose-400 hover:bg-rose-600 hover:text-white transition"
                     >
                       Turn Collar OFF
                     </button>
@@ -532,8 +532,8 @@ export default function AdminDashboard() {
                 </div>
 
                 {/* Safezone Placement & Configuration Strip */}
-                <div className="bg-night-2 border border-white/8 rounded-2xl p-3 flex flex-col gap-2.5 shrink-0">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="bg-night-2 border border-white/8 rounded-2xl p-3.5 flex flex-col gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="text-xs font-semibold text-canvas/50 mb-1 block">Target Safe Zone</label>
                       <select
@@ -575,23 +575,23 @@ export default function AdminDashboard() {
                     </div>
                   </div>
 
-                  <div className="flex justify-between items-center pt-2 border-t border-white/5 flex-wrap gap-2">
+                  <div className="flex justify-between items-center pt-3 border-t border-white/5 flex-wrap gap-3">
                     <span className="text-xs text-canvas/50">
                       Simulate physical tampering or snap pets into safe zones.
                     </span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
                       <Button
                         type="button"
                         variant="secondary"
                         onClick={handlePlaceInSafezone}
-                        className="!bg-white/10 !text-canvas hover:!bg-copper hover:!text-white !py-1.5 !px-3 !text-xs"
+                        className="flex-1 sm:flex-none !bg-white/10 !text-canvas hover:!bg-copper hover:!text-white !py-2 !px-3.5 !text-xs"
                       >
                         <Target size={15} weight="bold" /> Place in Zone
                       </Button>
                       <Button
                         type="button"
                         onClick={handleTriggerInstantBreach}
-                        className="!bg-rose-600 hover:!bg-rose-700 !text-white !py-1.5 !px-3 !text-xs font-bold transition flex items-center gap-1.5"
+                        className="flex-1 sm:flex-none !bg-rose-600 hover:!bg-rose-700 !text-white !py-2 !px-3.5 !text-xs font-bold transition flex items-center justify-center gap-1.5"
                       >
                         <WarningOctagon size={15} weight="fill" /> Force Breach / Shutdown
                       </Button>
@@ -599,13 +599,13 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                {/* Grouped Pet Selector: Natural scrolling on mobile, contained on desktop */}
-                <div className="flex flex-col min-h-0 lg:flex-1 lg:overflow-hidden pb-4 lg:pb-0">
-                  <span className="text-xs font-semibold text-copper mb-2 flex items-center gap-1 shrink-0">
+                {/* Grouped Pet Selector: Natural list layout on mobile */}
+                <div className="flex flex-col gap-2 mt-1">
+                  <span className="text-xs font-semibold text-copper flex items-center gap-1">
                     <PawPrint size={14} /> Select Pets (Categorized by Owner)
                   </span>
 
-                  <div className="flex-1 overflow-y-visible lg:overflow-y-auto custom-scrollbar flex flex-col gap-3 pr-1">
+                  <div className="flex flex-col gap-3 lg:max-h-[260px] lg:overflow-y-auto custom-scrollbar pr-1">
                     {owners.map((owner) => {
                       const ownerPets = allPets.filter(
                         (p) => (p.owner_id === owner.id || p.user_id === owner.id) && p.id_tag
@@ -669,7 +669,7 @@ export default function AdminDashboard() {
           </motion.div>
 
           {/* System Metrics Panel */}
-          <div className="bg-surface border border-linen rounded-[28px] p-5 flex flex-col gap-3 shrink-0">
+          <div className="bg-surface border border-linen rounded-[28px] p-5 flex flex-col gap-3">
             <h3 className="font-display text-lg">System Metrics</h3>
             <div className="grid grid-cols-2 lg:grid-cols-1 gap-3">
               <div className="bg-copper-soft rounded-2xl p-4">
@@ -684,7 +684,7 @@ export default function AdminDashboard() {
                 <div className="text-xs text-muted font-semibold uppercase tracking-wide">Pending Access</div>
                 <div className="font-display text-3xl text-amber">{pendingCount}</div>
               </div>
-              <div className="bg-canvas rounded-2xl p-4 flex items-center gap-2 text-sm text-muted">
+              <div className="bg-canvas rounded-2xl p-4 flex items-center gap-2 text-sm text-muted col-span-2 lg:col-span-1">
                 <MapPin size={16} className="text-copper" />
                 {allSafezones.length} safe zones mapped
               </div>

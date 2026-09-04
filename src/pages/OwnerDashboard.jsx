@@ -233,7 +233,7 @@ export default function OwnerDashboard() {
     });
   }, [devicesData, pets, safezones]);
 
-  // Collar Shutdown / Forceful Removal Tamper Detection
+  // Sudden Collar Shutdown / Forceful Removal Tamper Detection
   useEffect(() => {
     pets.forEach((pet) => {
       if (!pet.id_tag) return;
@@ -423,8 +423,8 @@ export default function OwnerDashboard() {
   ];
 
   return (
-    <div className="flex flex-col min-h-dvh w-full bg-canvas text-ink lg:h-dvh lg:overflow-hidden pb-24 md:pb-0">
-      <header className="flex justify-between items-center px-4 py-3 shrink-0 z-20 bg-surface/80 border-b border-linen backdrop-blur-md sticky top-0 md:static">
+    <div className="w-full min-h-screen bg-canvas text-ink lg:h-screen lg:overflow-hidden flex flex-col pb-28 md:pb-0">
+      <header className="flex justify-between items-center px-4 py-3 shrink-0 z-20 bg-surface/80 border-b border-linen backdrop-blur-md sticky top-0">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-2xl bg-copper text-white flex items-center justify-center shadow-sm">
             <PawPrint size={18} weight="fill" />
@@ -456,7 +456,8 @@ export default function OwnerDashboard() {
         </div>
       </header>
 
-      <div className="flex-1 flex min-h-0 px-3 py-3 gap-3 overflow-y-visible lg:overflow-hidden">
+      {/* Body Container: Natural full-page flow on mobile, split-pane on desktop */}
+      <div className="flex-1 w-full flex flex-col md:flex-row p-3 gap-3 overflow-y-visible lg:overflow-hidden min-h-0">
         {/* Desktop Sidebar */}
         <aside className="hidden md:flex bg-night text-canvas p-2 rounded-[22px] flex-col gap-2 items-center shrink-0 w-[68px] shadow-lg shadow-night/10">
           {navItems.map((item) => {
@@ -478,10 +479,10 @@ export default function OwnerDashboard() {
           </button>
         </aside>
 
-        {/* Main Content Grid: Stacks on mobile, side-by-side on desktop */}
+        {/* Content Area */}
         <div className="flex-1 flex flex-col lg:grid lg:grid-cols-3 gap-3 min-h-0">
-          {/* Map Column */}
-          <div className="w-full h-[380px] sm:h-[440px] lg:h-full lg:col-span-2 bg-night rounded-[28px] overflow-hidden relative shadow-lg shadow-night/10 shrink-0 lg:shrink">
+          {/* Map */}
+          <div className="w-full h-[380px] sm:h-[440px] lg:h-full lg:col-span-2 bg-night rounded-[28px] overflow-hidden relative shadow-lg shadow-night/10 shrink-0">
             {isPlacingOnMap && (
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[2000] bg-copper text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-sm font-semibold">
                 <Target size={18} weight="bold" />
@@ -589,7 +590,7 @@ export default function OwnerDashboard() {
           </div>
 
           {/* Details & Telemetry Column */}
-          <div className="flex lg:col-span-1 min-h-0 flex-col gap-3">
+          <div className="flex flex-col gap-3 lg:col-span-1 lg:overflow-y-auto custom-scrollbar">
             <HealthCard
               activePet={activePet}
               activeTelemetry={activeTelemetry}
@@ -615,8 +616,8 @@ export default function OwnerDashboard() {
         </div>
       </div>
 
-      {/* Mobile Fixed Bottom Navigation Bar with Safe-Area Padding */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around px-2 py-2.5 pb-[max(0.6rem,env(safe-area-inset-bottom))] bg-surface/95 backdrop-blur-md border-t border-linen shadow-[0_-8px_24px_rgba(28,23,18,0.08)]">
+      {/* Mobile Bottom Bar */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around px-2 py-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-surface/95 backdrop-blur-md border-t border-linen shadow-[0_-8px_24px_rgba(28,23,18,0.08)]">
         {navItems.map((item) => {
           const Icon = item.icon;
           const active = panel === item.id;
@@ -633,6 +634,7 @@ export default function OwnerDashboard() {
         </button>
       </nav>
 
+      {/* Slide Panels */}
       <AnimatePresence>
         {panel === 'pets' && (
           <SlidePanel title="Your pets" onClose={() => setPanel('home')}>
@@ -780,6 +782,7 @@ export default function OwnerDashboard() {
         )}
       </AnimatePresence>
 
+      {/* Alerts Modal */}
       <Modal open={alertsOpen} onClose={() => setAlertsOpen(false)} title="Alerts" subtitle="Live updates from collars and zones">
         {notifications.length === 0 ? (
           <EmptyState icon={<Bell size={24} />} title="All quiet" body="You’ll see a toast here if a pet leaves a home zone or a collar is breached." />
@@ -802,6 +805,7 @@ export default function OwnerDashboard() {
         )}
       </Modal>
 
+      {/* Add Pet Modal */}
       <Modal open={isAddPetModalOpen} onClose={() => setIsAddPetModalOpen(false)} title="Add a pet" subtitle="Collar ID is optional until the hardware is ready.">
         <form onSubmit={handleAddPet} className="flex flex-col gap-3">
           <label className="text-xs font-semibold text-muted">Name *
@@ -868,7 +872,7 @@ function SlidePanel({ title, subtitle, onClose, children, wide }) {
 function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmValue, spo2Value, batteryValue, biometricHistory, onAdd }) {
   if (!activePet) {
     return (
-      <div className="flex-none bg-surface border border-linen rounded-[28px] p-4">
+      <div className="bg-surface border border-linen rounded-[28px] p-4">
         <EmptyState
           icon={<PawPrint size={24} weight="fill" />}
           title="No pets yet"
@@ -884,7 +888,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
   const batTone = !live ? 'muted' : batteryValue < 20 ? 'danger' : 'meadow';
 
   return (
-    <div className="flex-none bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
+    <div className="bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
       <div className="flex justify-between items-start mb-3">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-muted">Selected pet</div>
@@ -972,12 +976,12 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
 
 function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect, onDelete }) {
   return (
-    <div className="flex-1 min-h-[220px] bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
+    <div className="bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
       <div className="flex justify-between mb-3">
         <h3 className="text-sm font-semibold">Family</h3>
         <span className="text-xs text-muted">{pets.length} registered</span>
       </div>
-      <div className="flex-1 overflow-auto custom-scrollbar flex flex-col gap-2">
+      <div className="flex flex-col gap-2">
         {pets.length === 0 && <p className="text-sm text-muted">Your pets will show up here.</p>}
         {pets.map((pet) => {
           const telemetry = devicesData[pet.id_tag];

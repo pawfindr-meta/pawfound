@@ -89,7 +89,7 @@ export default function Login() {
   };
 
   return (
-    <div className="relative flex min-h-dvh w-full items-center justify-center p-4 sm:p-6 py-8 md:py-6 bg-night overflow-y-auto">
+    <div className="w-full min-h-screen bg-night relative flex items-center justify-center p-4 sm:p-6 py-12 sm:py-8 overflow-y-auto">
       {/* Faulty Terminal Animated Background */}
       <div className="fixed inset-0 z-0 flex items-center justify-center pointer-events-none">
         <div style={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -113,7 +113,7 @@ export default function Login() {
 
       <motion.div
         layout
-        className={`relative z-10 w-full ${isLogin ? 'max-w-[420px]' : 'max-w-3xl'} bg-night/85 backdrop-blur-xl text-canvas border border-white/10 rounded-[32px] shadow-[0_30px_80px_rgba(0,0,0,0.45)] p-6 sm:p-8 my-auto`}
+        className={`relative z-10 w-full ${isLogin ? 'max-w-[420px]' : 'max-w-3xl'} bg-night/85 backdrop-blur-xl text-canvas border border-white/10 rounded-[32px] shadow-[0_30px_80px_rgba(0,0,0,0.45)] p-6 sm:p-8`}
       >
         <div className="flex items-center justify-center gap-2 mb-2">
           <span className="w-9 h-9 rounded-2xl bg-copper text-white flex items-center justify-center">
