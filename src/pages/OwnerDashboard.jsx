@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { signOut } from 'firebase/auth';
-import { doc, onSnapshot, collection, query, where, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, where, addDoc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MapContainer, TileLayer, Marker, Circle, Popup, Polyline, useMap, useMapEvents } from 'react-leaflet';
@@ -10,7 +10,8 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 import {
   House, PawPrint, ChartLineUp, Crosshair, Plus, Bell, User, X,
   WarningOctagon, ShieldCheck, Trash, MapPin, Gps, Heartbeat,
-  Drop, BatteryCharging, SignOut, Target, NavigationArrow, WifiHigh, WifiSlash, PencilSimple
+  Drop, BatteryCharging, SignOut, Target, NavigationArrow, WifiHigh, WifiSlash, PencilSimple,
+  QrCode, Megaphone
 } from '@phosphor-icons/react';
 import { auth, db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
@@ -20,6 +21,8 @@ import { formatAuthError } from '../lib/formatError';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import EmptyState from '../components/ui/EmptyState';
+import PetQRModal from '../components/PetQRModal';
+import BroadcastDetailModal from '../components/BroadcastDetailModal';
 
 function createPetMarkerIcon(isSelected, isBreached, hasSignal) {
   const color = !hasSignal ? '#6B6258' : isBreached ? '#B42318' : '#C45C26';
@@ -31,6 +34,18 @@ function createPetMarkerIcon(isSelected, isBreached, hasSignal) {
     </div>`,
     iconSize: [32, 32],
     iconAnchor: [16, 16],
+  });
+}
+
+function createMissingBeaconIcon() {
+  return L.divIcon({
+    className: 'custom-missing-beacon',
+    html: `<div class="relative flex h-9 w-9 items-center justify-center">
+      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
+      <span class="relative inline-flex rounded-full h-7 w-7 bg-[#B42318] border-2 border-white items-center justify-center shadow-md text-white font-bold text-[9px]">SOS</span>
+    </div>`,
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
   });
 }
 
@@ -95,6 +110,10 @@ export default function OwnerDashboard() {
   const [followPet, setFollowPet] = useState(true);
   const [now, setNow] = useState(Date.now());
 
+  const [activeBroadcasts, setActiveBroadcasts] = useState([]);
+  const [selectedBroadcast, setSelectedBroadcast] = useState(null);
+  const [selectedPetForQR, setSelectedPetForQR] = useState(null);
+
   const [newSzName, setNewSzName] = useState('');
   const [newSzLat, setNewSzLat] = useState('');
   const [newSzLng, setNewSzLng] = useState('');
@@ -131,6 +150,16 @@ export default function OwnerDashboard() {
     });
     return () => unsub();
   }, [currentUser, activePetId]);
+
+  useEffect(() => {
+    const q = query(collection(db, 'broadcasts'), where('status', '==', 'active'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const list = [];
+      snapshot.forEach((docSnap) => list.push({ id: docSnap.id, ...docSnap.data() }));
+      setActiveBroadcasts(list);
+    });
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -196,7 +225,6 @@ export default function OwnerDashboard() {
     return () => unsubs.forEach((unsub) => unsub());
   }, [pets, activePetId]);
 
-  // Safezone Boundary Breach Detection
   useEffect(() => {
     if (safezones.length === 0) return;
     pets.forEach((pet) => {
@@ -233,7 +261,6 @@ export default function OwnerDashboard() {
     });
   }, [devicesData, pets, safezones]);
 
-  // Sudden Collar Shutdown / Forceful Removal Tamper Detection
   useEffect(() => {
     pets.forEach((pet) => {
       if (!pet.id_tag) return;
@@ -268,6 +295,69 @@ export default function OwnerDashboard() {
       };
     });
   }, [devicesData, pets]);
+
+  const handleBroadcastMissing = async (pet) => {
+    if (!pet) return;
+    const telemetry = devicesData[pet.id_tag] || {};
+    const fallbackLat = safezones[0]?.lat || 14.5995;
+    const fallbackLng = safezones[0]?.lng || 120.9842;
+
+    const lat = typeof telemetry.lat === 'number' ? telemetry.lat : fallbackLat;
+    const lng = typeof telemetry.lng === 'number' ? telemetry.lng : fallbackLng;
+
+    try {
+      await updateDoc(doc(db, 'pets', pet.id), {
+        is_missing: true,
+        missing_since: new Date().toISOString(),
+      });
+
+      await addDoc(collection(db, 'broadcasts'), {
+        pet_id: pet.id,
+        id_tag: pet.id_tag || '',
+        owner_id: currentUser.uid,
+        owner_name: `${userData?.first_name || 'Pet'} ${userData?.last_name || 'Owner'}`,
+        owner_phone: userData?.phone_number || 'N/A',
+        pet_name: pet.name,
+        pet_type: pet.type,
+        pet_breed: pet.breed || 'Mixed',
+        pet_age: pet.age,
+        last_lat: lat,
+        last_lng: lng,
+        vitals: {
+          bpm: telemetry.bpm || '--',
+          spo2: telemetry.spo2 || '--',
+          battery: telemetry.battery || '--',
+        },
+        status: 'active',
+        created_at: new Date().toISOString(),
+      });
+
+      toast.error(`ALERT POSTED: ${pet.name} is now broadcasted to all community members on the map.`);
+    } catch (err) {
+      toast.error(formatAuthError(err));
+    }
+  };
+
+  const handleRescuePet = async (broadcast) => {
+    try {
+      await updateDoc(doc(db, 'broadcasts', broadcast.id), {
+        status: 'resolved',
+        rescued_by: {
+          user_id: currentUser.uid,
+          user_name: `${userData?.first_name || 'Community'} ${userData?.last_name || 'Member'}`,
+          rescued_at: new Date().toISOString(),
+        },
+      });
+
+      await updateDoc(doc(db, 'pets', broadcast.pet_id), {
+        is_missing: false,
+      });
+
+      toast.success(`Rescue reported! Thank you for finding ${broadcast.pet_name}.`);
+    } catch (err) {
+      toast.error('Could not update rescue status.');
+    }
+  };
 
   const handleUseCurrentLocation = () => {
     if (!navigator.geolocation) return toast.error('Location is not available in this browser.');
@@ -350,17 +440,30 @@ export default function OwnerDashboard() {
     e.preventDefault();
     const formData = new FormData(e.target);
     try {
-      await addDoc(collection(db, 'pets'), {
+      const petDocRef = await addDoc(collection(db, 'pets'), {
         owner_id: currentUser.uid,
         name: formData.get('pet_name'),
         type: formData.get('pet_type'),
         breed: formData.get('pet_breed'),
         age: formData.get('pet_age'),
         id_tag: (formData.get('id_tag') || '').trim(),
+        is_missing: false,
         created_at: new Date().toISOString(),
       });
+
+      await setDoc(doc(db, 'public_pets', petDocRef.id), {
+        name: formData.get('pet_name'),
+        type: formData.get('pet_type'),
+        breed: formData.get('pet_breed'),
+        age: formData.get('pet_age'),
+        id_tag: (formData.get('id_tag') || '').trim(),
+        owner_name: `${userData?.first_name || 'Pet'} ${userData?.last_name || 'Owner'}`,
+        owner_phone: userData?.phone_number || 'N/A',
+        created_at: new Date().toISOString(),
+      });
+
       setIsAddPetModalOpen(false);
-      toast.success('Pet added to your family');
+      toast.success('Pet registered! Digital QR tag ready.');
     } catch (error) {
       toast.error(formatAuthError(error));
     }
@@ -372,6 +475,7 @@ export default function OwnerDashboard() {
 
     try {
       await deleteDoc(doc(db, 'pets', petId));
+      await deleteDoc(doc(db, 'public_pets', petId));
       
       breachedPetsRef.current.delete(petId);
       if (idTag) {
@@ -435,9 +539,12 @@ export default function OwnerDashboard() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="hidden sm:inline-flex text-xs font-medium bg-surface border border-linen rounded-full px-3 py-1.5 text-muted">
-            {pets.length} {pets.length === 1 ? 'pet' : 'pets'} · {safezones.length} {safezones.length === 1 ? 'zone' : 'zones'}
-          </span>
+          {activeBroadcasts.length > 0 && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-danger-soft border border-danger/30 text-danger rounded-full text-xs font-bold animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-danger" />
+              {activeBroadcasts.length} Lost
+            </span>
+          )}
           <button
             onClick={markAlertsRead}
             className="relative p-2.5 bg-surface border border-linen hover:bg-copper-soft rounded-2xl transition"
@@ -456,9 +563,7 @@ export default function OwnerDashboard() {
         </div>
       </header>
 
-      {/* Body Container: Natural full-page flow on mobile, split-pane on desktop */}
       <div className="flex-1 w-full flex flex-col md:flex-row p-3 gap-3 overflow-y-visible lg:overflow-hidden min-h-0">
-        {/* Desktop Sidebar */}
         <aside className="hidden md:flex bg-night text-canvas p-2 rounded-[22px] flex-col gap-2 items-center shrink-0 w-[68px] shadow-lg shadow-night/10">
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -479,9 +584,7 @@ export default function OwnerDashboard() {
           </button>
         </aside>
 
-        {/* Content Area */}
         <div className="flex-1 flex flex-col lg:grid lg:grid-cols-3 gap-3 min-h-0">
-          {/* Map */}
           <div className="w-full h-[380px] sm:h-[440px] lg:h-full lg:col-span-2 bg-night rounded-[28px] overflow-hidden relative shadow-lg shadow-night/10 shrink-0">
             {isPlacingOnMap && (
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[2000] bg-copper text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-sm font-semibold">
@@ -552,6 +655,24 @@ export default function OwnerDashboard() {
                   </Marker>
                 );
               })}
+
+              {activeBroadcasts.map((b) => (
+                <Marker
+                  key={`missing-${b.id}`}
+                  position={[b.last_lat, b.last_lng]}
+                  icon={createMissingBeaconIcon()}
+                  eventHandlers={{
+                    click: () => setSelectedBroadcast(b),
+                  }}
+                >
+                  <Popup>
+                    <div className="p-1 text-sm">
+                      <strong className="text-danger font-bold">MISSING: {b.pet_name}</strong>
+                      <div className="text-xs text-muted mt-0.5">Tap beacon to view info and contact owner</div>
+                    </div>
+                  </Popup>
+                </Marker>
+              ))}
             </MapContainer>
 
             <div className="absolute top-3 left-3 z-[1000] flex gap-2 overflow-x-auto max-w-[70%] pb-1">
@@ -589,7 +710,6 @@ export default function OwnerDashboard() {
             </button>
           </div>
 
-          {/* Details & Telemetry Column */}
           <div className="flex flex-col gap-3 lg:col-span-1 lg:overflow-y-auto custom-scrollbar">
             <HealthCard
               activePet={activePet}
@@ -602,6 +722,8 @@ export default function OwnerDashboard() {
               batteryValue={batteryValue}
               biometricHistory={biometricHistory}
               onAdd={() => setIsAddPetModalOpen(true)}
+              onBroadcast={() => handleBroadcastMissing(activePet)}
+              onShowQR={() => setSelectedPetForQR(activePet)}
             />
             <PetListCard 
               pets={pets} 
@@ -610,13 +732,13 @@ export default function OwnerDashboard() {
               safezones={safezones} 
               now={now} 
               onSelect={setActivePetId} 
-              onDelete={handleDeletePet} 
+              onDelete={handleDeletePet}
+              onShowQR={(pet) => setSelectedPetForQR(pet)}
             />
           </div>
         </div>
       </div>
 
-      {/* Mobile Bottom Bar */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around px-2 py-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-surface/95 backdrop-blur-md border-t border-linen shadow-[0_-8px_24px_rgba(28,23,18,0.08)]">
         {navItems.map((item) => {
           const Icon = item.icon;
@@ -634,7 +756,20 @@ export default function OwnerDashboard() {
         </button>
       </nav>
 
-      {/* Slide Panels */}
+      <PetQRModal
+        pet={selectedPetForQR}
+        open={Boolean(selectedPetForQR)}
+        onClose={() => setSelectedPetForQR(null)}
+      />
+
+      <BroadcastDetailModal
+        broadcast={selectedBroadcast}
+        open={Boolean(selectedBroadcast)}
+        onClose={() => setSelectedBroadcast(null)}
+        onRescue={handleRescuePet}
+        currentUserId={currentUser?.uid}
+      />
+
       <AnimatePresence>
         {panel === 'pets' && (
           <SlidePanel title="Your pets" onClose={() => setPanel('home')}>
@@ -650,25 +785,35 @@ export default function OwnerDashboard() {
                 {pets.map((p) => (
                   <div
                     key={p.id}
-                    className="flex items-center justify-between bg-canvas border border-linen rounded-2xl p-4 hover:border-copper/40 transition gap-2"
+                    className="flex items-center justify-between bg-canvas border border-linen rounded-2xl p-3.5 hover:border-copper/40 transition gap-2"
                   >
                     <button
                       type="button"
                       onClick={() => { setActivePetId(p.id); setPanel('home'); setFollowPet(true); }}
                       className="text-left flex-1"
                     >
-                      <div className="font-semibold">{p.name}</div>
+                      <div className="font-semibold text-sm">{p.name}</div>
                       <div className="text-sm text-muted">{p.type} · {p.breed || 'Mixed'} · {p.age} yrs</div>
-                      <div className="text-xs text-copper mt-1">{p.id_tag ? `Collar ${p.id_tag}` : 'No collar linked yet'}</div>
+                      <div className="text-[11px] text-copper mt-0.5">{p.id_tag ? `Collar ${p.id_tag}` : 'No collar linked'}</div>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeletePet(p.id, p.name, p.id_tag)}
-                      className="p-2.5 text-muted hover:text-danger hover:bg-danger-soft rounded-xl transition"
-                      title={`Remove ${p.name}`}
-                    >
-                      <Trash size={18} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPetForQR(p)}
+                        className="p-2 text-muted hover:text-copper hover:bg-copper-soft rounded-xl transition"
+                        title="Show Collar QR"
+                      >
+                        <QrCode size={18} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePet(p.id, p.name, p.id_tag)}
+                        className="p-2 text-muted hover:text-danger hover:bg-danger-soft rounded-xl transition"
+                        title={`Remove ${p.name}`}
+                      >
+                        <Trash size={18} />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -782,7 +927,6 @@ export default function OwnerDashboard() {
         )}
       </AnimatePresence>
 
-      {/* Alerts Modal */}
       <Modal open={alertsOpen} onClose={() => setAlertsOpen(false)} title="Alerts" subtitle="Live updates from collars and zones">
         {notifications.length === 0 ? (
           <EmptyState icon={<Bell size={24} />} title="All quiet" body="You’ll see a toast here if a pet leaves a home zone or a collar is breached." />
@@ -805,8 +949,7 @@ export default function OwnerDashboard() {
         )}
       </Modal>
 
-      {/* Add Pet Modal */}
-      <Modal open={isAddPetModalOpen} onClose={() => setIsAddPetModalOpen(false)} title="Add a pet" subtitle="Collar ID is optional until the hardware is ready.">
+      <Modal open={isAddPetModalOpen} onClose={() => setIsAddPetModalOpen(false)} title="Add a pet" subtitle="A unique digital QR code will be generated automatically.">
         <form onSubmit={handleAddPet} className="flex flex-col gap-3">
           <label className="text-xs font-semibold text-muted">Name *
             <input name="pet_name" required className="mt-1 w-full bg-canvas border border-linen rounded-xl px-3 py-2 text-sm outline-none focus:border-copper" />
@@ -869,7 +1012,7 @@ function SlidePanel({ title, subtitle, onClose, children, wide }) {
   );
 }
 
-function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmValue, spo2Value, batteryValue, biometricHistory, onAdd }) {
+function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmValue, spo2Value, batteryValue, biometricHistory, onAdd, onBroadcast, onShowQR }) {
   if (!activePet) {
     return (
       <div className="bg-surface border border-linen rounded-[28px] p-4">
@@ -889,7 +1032,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
 
   return (
     <div className="bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
-      <div className="flex justify-between items-start mb-3">
+      <div className="flex justify-between items-start mb-2">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-muted">Selected pet</div>
           <h3 className="font-display text-xl">{activePet.name}</h3>
@@ -902,11 +1045,30 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
           {activeTelemetry?.is_breached ? 'Collar Breached' : breached ? 'Outside zones' : activeSafety.matchedZone ? activeSafety.matchedZone.name : 'No zones yet'}
         </span>
       </div>
-      <div className={`flex items-center gap-2 text-xs mb-3 ${live ? 'text-meadow' : 'text-muted'}`}>
-        {live ? <WifiHigh size={14} /> : <WifiSlash size={14} />}
-        {formatLastSeen(activeTelemetry?.lastPingTime, now)}
-        {activePet.id_tag ? <span className="text-muted">· {activePet.id_tag}</span> : <span className="text-muted">· No collar</span>}
+
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <div className={`flex items-center gap-1.5 text-xs ${live ? 'text-meadow' : 'text-muted'}`}>
+          {live ? <WifiHigh size={14} /> : <WifiSlash size={14} />}
+          {formatLastSeen(activeTelemetry?.lastPingTime, now)}
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onShowQR}
+            className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 bg-night text-canvas hover:bg-copper rounded-xl transition"
+          >
+            <QrCode size={14} /> QR Tag
+          </button>
+          <button
+            type="button"
+            onClick={onBroadcast}
+            className="flex items-center gap-1 text-xs font-bold px-2.5 py-1 bg-danger hover:bg-rose-700 text-white rounded-xl transition shadow-sm"
+          >
+            <Megaphone size={14} weight="fill" /> Report Lost
+          </button>
+        </div>
       </div>
+
       <div className="mb-3 rounded-2xl border border-linen bg-night p-3 text-canvas">
         <div className="mb-2 flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-canvas/70">
@@ -945,6 +1107,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
           </div>
         )}
       </div>
+
       <div className="flex flex-col gap-2">
         <MetricRow 
           icon={<Heartbeat size={16} className="text-copper" />} 
@@ -974,7 +1137,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
   );
 }
 
-function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect, onDelete }) {
+function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect, onDelete, onShowQR }) {
   return (
     <div className="bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
       <div className="flex justify-between mb-3">
@@ -1018,6 +1181,16 @@ function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect,
                 }`}>
                   {isBreached ? 'BREACH' : !petOnline ? 'OFF' : (!safety.isSafe && !safety.unknown ? 'OUT' : 'OK')}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => onShowQR(pet)}
+                  className={`p-1.5 rounded-lg transition ${
+                    selected ? 'text-canvas/50 hover:text-copper hover:bg-white/10' : 'text-muted hover:text-copper hover:bg-copper-soft'
+                  }`}
+                  title="Collar QR Tag"
+                >
+                  <QrCode size={15} />
+                </button>
                 <button
                   type="button"
                   onClick={(e) => {
