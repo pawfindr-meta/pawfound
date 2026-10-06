@@ -1,11 +1,20 @@
 import React from 'react';
 import Modal from './ui/Modal';
 import Button from './ui/Button';
-import { Phone, Heartbeat, Drop, BatteryCharging, ShieldCheck } from '@phosphor-icons/react';
+import { Phone, Heartbeat, Drop, BatteryCharging, ShieldCheck, CheckCircle } from '@phosphor-icons/react';
 
-export default function BroadcastDetailModal({ broadcast, open, onClose, onRescue, currentUserId }) {
+export default function BroadcastDetailModal({ 
+  broadcast, 
+  open, 
+  onClose, 
+  onRescue, 
+  onResolve, 
+  currentUserId,
+  isAdmin = false 
+}) {
   if (!broadcast) return null;
   const isOwner = broadcast.owner_id === currentUserId;
+  const canResolve = isOwner || isAdmin;
 
   return (
     <Modal open={open} onClose={onClose} title={`Lost Pet: ${broadcast.pet_name}`} subtitle="Community Search Alert">
@@ -58,7 +67,17 @@ export default function BroadcastDetailModal({ broadcast, open, onClose, onRescu
 
         <div className="flex gap-2 mt-1">
           <Button variant="secondary" className="flex-1" onClick={onClose}>Close</Button>
-          {!isOwner && (
+          {canResolve ? (
+            <Button
+              className="flex-1 !bg-meadow !text-white font-bold"
+              onClick={() => {
+                if (onResolve) onResolve(broadcast);
+                onClose();
+              }}
+            >
+              <CheckCircle size={16} weight="bold" /> Mark as Found
+            </Button>
+          ) : (
             <Button
               className="flex-1 !bg-meadow !text-white font-bold"
               onClick={() => {

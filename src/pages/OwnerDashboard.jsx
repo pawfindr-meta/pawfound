@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { signOut } from 'firebase/auth';
-import { doc, onSnapshot, collection, query, where, addDoc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, where, addDoc, updateDoc, deleteDoc, setDoc, getDocs } from 'firebase/firestore';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MapContainer, TileLayer, Marker, Circle, Popup, Polyline, useMap, useMapEvents } from 'react-leaflet';
@@ -16,7 +16,7 @@ import {
 import { auth, db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { checkPetSafety, DEFAULT_MAP_CENTER } from '../lib/geo';
-import { formatLastSeen, isLive } from '../lib/time';
+import { formatLastSeen } from '../lib/time';
 import { formatAuthError } from '../lib/formatError';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
@@ -126,6 +126,8 @@ export default function OwnerDashboard() {
 
   const breachedPetsRef = useRef(new Set());
   const prevDeviceStateRef = useRef({});
+  const lastReceivedTimeRef = useRef({});
+  const lastPingCountRef = useRef({});
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   useEffect(() => {
@@ -181,27 +183,34 @@ export default function OwnerDashboard() {
       return onSnapshot(doc(db, 'devices', pet.id_tag), (docSnap) => {
         if (!docSnap.exists()) return;
         const data = docSnap.data();
-        const lat = typeof data.lat === 'number' ? data.lat : null;
-        const lng = typeof data.lng === 'number' ? data.lng : null;
 
-        const isDeviceOnline = data.status === 'online' && Boolean(data.last_updated);
-        const pingTimestamp = isDeviceOnline ? new Date(data.last_updated).getTime() : null;
+        // Detect live heartbeat pulse directly via browser clock
+        const currentCount = data.ping_count ?? data.last_updated;
+        if (currentCount !== undefined && currentCount !== lastPingCountRef.current[pet.id_tag]) {
+          lastPingCountRef.current[pet.id_tag] = currentCount;
+          lastReceivedTimeRef.current[pet.id_tag] = Date.now();
+        }
+
+        const isGpsLocked = Boolean(data.gps_locked) && typeof data.lat === 'number' && typeof data.lng === 'number';
+        const lat = isGpsLocked ? data.lat : null;
+        const lng = isGpsLocked ? data.lng : null;
 
         setDevicesData((prev) => ({
           ...prev,
           [pet.id_tag]: {
             lat,
             lng,
-            bpm: isDeviceOnline ? (data.bpm ?? '--') : '--',
-            spo2: isDeviceOnline ? (data.spo2 ?? '--') : '--',
-            battery: isDeviceOnline ? (data.battery ?? '--') : '--',
-            status: isDeviceOnline ? 'online' : 'offline',
+            gps_locked: isGpsLocked,
+            bpm: data.bpm !== undefined && data.bpm !== null ? data.bpm : '--',
+            spo2: data.spo2 !== undefined && data.spo2 !== null ? data.spo2 : '--',
+            battery: data.battery !== undefined && data.battery !== null ? data.battery : '--',
+            status: data.status || 'offline',
             is_breached: Boolean(data.is_breached),
-            lastPingTime: pingTimestamp,
+            lastPingTime: lastReceivedTimeRef.current[pet.id_tag] || null,
           },
         }));
 
-        if (isDeviceOnline && lat != null && lng != null) {
+        if (lat != null && lng != null) {
           setPositionTrails((prev) => {
             const currentTrail = prev[pet.id_tag] || [];
             const lastPos = currentTrail[currentTrail.length - 1];
@@ -213,11 +222,9 @@ export default function OwnerDashboard() {
         }
 
         if (activePet && pet.id_tag === activePet.id_tag) {
-          if (isDeviceOnline && data.bpm && data.spo2) {
+          if (data.bpm && data.spo2 && data.bpm !== '--' && data.spo2 !== '--') {
             const timeString = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             setBiometricHistory((prev) => [...prev, { time: timeString, bpm: data.bpm, spo2: data.spo2 }].slice(-20));
-          } else if (!isDeviceOnline) {
-            setBiometricHistory([]);
           }
         }
       });
@@ -359,6 +366,20 @@ export default function OwnerDashboard() {
     }
   };
 
+  const handleResolveAlert = async (broadcast) => {
+    try {
+      await deleteDoc(doc(db, 'broadcasts', broadcast.id));
+      if (broadcast.pet_id) {
+        await updateDoc(doc(db, 'pets', broadcast.pet_id), {
+          is_missing: false,
+        });
+      }
+      toast.success(`Alert for ${broadcast.pet_name} has been resolved.`);
+    } catch (err) {
+      toast.error('Could not resolve broadcast.');
+    }
+  };
+
   const handleUseCurrentLocation = () => {
     if (!navigator.geolocation) return toast.error('Location is not available in this browser.');
     setIsLocating(true);
@@ -476,9 +497,17 @@ export default function OwnerDashboard() {
     try {
       await deleteDoc(doc(db, 'pets', petId));
       await deleteDoc(doc(db, 'public_pets', petId));
-      
-      breachedPetsRef.current.delete(petId);
+
+      const bQuery = query(collection(db, 'broadcasts'), where('pet_id', '==', petId));
+      const bSnap = await getDocs(bQuery);
+      const bDeletions = bSnap.docs.map((bDoc) => deleteDoc(bDoc.ref));
+      await Promise.all(bDeletions);
+
       if (idTag) {
+        try {
+          await deleteDoc(doc(db, 'devices', idTag));
+        } catch (_) {}
+
         setPositionTrails((prev) => {
           const updated = { ...prev };
           delete updated[idTag];
@@ -491,6 +520,7 @@ export default function OwnerDashboard() {
         });
       }
 
+      breachedPetsRef.current.delete(petId);
       toast.success(`${petName} removed`);
     } catch (err) {
       toast.error(formatAuthError(err));
@@ -503,7 +533,15 @@ export default function OwnerDashboard() {
   };
 
   const activeTelemetry = activePet?.id_tag ? devicesData[activePet.id_tag] : null;
-  const hasFix = activeTelemetry?.lat != null && activeTelemetry?.lng != null;
+
+  // Heartbeat freshness: powered on ONLY if ping received within the last 12 seconds
+  const isPoweredOn = activeTelemetry?.lastPingTime 
+    ? (now - activeTelemetry.lastPingTime < 12000) 
+    : false;
+
+  // Genuine GPS lock check
+  const hasFix = isPoweredOn && Boolean(activeTelemetry?.gps_locked) && activeTelemetry?.lat != null && activeTelemetry?.lng != null;
+  
   const activeSafety = activePet && hasFix
     ? checkPetSafety(activeTelemetry.lat, activeTelemetry.lng, safezones)
     : { isSafe: true, matchedZone: null, unknown: true };
@@ -512,12 +550,9 @@ export default function OwnerDashboard() {
     ? [activeTelemetry.lat, activeTelemetry.lng]
     : (safezones[0] ? [safezones[0].lat, safezones[0].lng] : DEFAULT_MAP_CENTER);
 
-  const isCollarOnline = activeTelemetry?.status === 'online' && activeTelemetry?.lastPingTime != null;
-  const live = isCollarOnline && isLive(activeTelemetry?.lastPingTime, now);
-
-  const bpmValue = live ? (parseFloat(activeTelemetry?.bpm) || 0) : 0;
-  const spo2Value = live ? (parseFloat(activeTelemetry?.spo2) || 0) : 0;
-  const batteryValue = live ? (parseFloat(activeTelemetry?.battery) || 0) : 0;
+  const bpmValue = isPoweredOn ? (parseFloat(activeTelemetry?.bpm) || 0) : 0;
+  const spo2Value = isPoweredOn ? (parseFloat(activeTelemetry?.spo2) || 0) : 0;
+  const batteryValue = isPoweredOn ? (parseFloat(activeTelemetry?.battery) || 0) : 0;
 
   const navItems = [
     { id: 'home', icon: House, label: 'Home' },
@@ -599,7 +634,7 @@ export default function OwnerDashboard() {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" 
                 attribution="&copy; OpenStreetMap contributors" 
               />
-              <MapUpdater center={mapCenter} follow={followPet && !isPlacingOnMap} />
+              <MapUpdater center={mapCenter} follow={followPet && !isPlacingOnMap && hasFix} />
               <MapClickHandler isPlacingMode={isPlacingOnMap} onMapClick={handleMapPinSelected} />
 
               {safezones.map((sz) => (
@@ -614,16 +649,17 @@ export default function OwnerDashboard() {
 
               {pets.map((pet) => {
                 const telemetry = devicesData[pet.id_tag];
-                if (telemetry?.lat == null || telemetry?.lng == null) return null;
-                const petOnline = telemetry.status === 'online' && telemetry.lastPingTime != null;
+                const petPowered = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 12000) : false;
+                
+                // Only render pin on the map if device is powered on AND genuine GPS lock exists
+                if (!petPowered || !telemetry?.gps_locked || telemetry?.lat == null || telemetry?.lng == null) return null;
                 const safety = checkPetSafety(telemetry.lat, telemetry.lng, safezones);
                 const selected = activePetId === pet.id;
-                const signal = petOnline && isLive(telemetry.lastPingTime, now);
                 return (
                   <Marker
                     key={pet.id}
                     position={[telemetry.lat, telemetry.lng]}
-                    icon={createPetMarkerIcon(selected, (!safety.isSafe && !safety.unknown) || telemetry.is_breached, signal)}
+                    icon={createPetMarkerIcon(selected, (!safety.isSafe && !safety.unknown) || telemetry.is_breached, petPowered)}
                     eventHandlers={{ click: () => { setActivePetId(pet.id); setFollowPet(true); } }}
                   >
                     <Popup className="custom-leaflet-popup">
@@ -632,7 +668,7 @@ export default function OwnerDashboard() {
                         <div className={`mt-1 font-medium ${
                           telemetry.is_breached
                             ? 'text-danger font-bold'
-                            : !signal
+                            : !petPowered
                             ? 'text-muted'
                             : !safety.isSafe && !safety.unknown
                             ? 'text-danger'
@@ -642,7 +678,7 @@ export default function OwnerDashboard() {
                         }`}>
                           {telemetry.is_breached
                             ? 'Collar Tampered / Breached'
-                            : !signal
+                            : !petPowered
                             ? 'Collar is offline'
                             : !safety.isSafe && !safety.unknown
                             ? 'Outside every zone'
@@ -691,8 +727,22 @@ export default function OwnerDashboard() {
 
             <div className="absolute top-3 right-3 z-[1000] rounded-2xl border border-white/60 bg-surface/90 px-3 py-2 shadow-lg backdrop-blur-md">
               <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-ink">
-                <span className={`h-2 w-2 rounded-full ${live ? 'bg-meadow animate-pulse' : activeTelemetry?.is_breached ? 'bg-danger animate-ping' : 'bg-muted'}`} />
-                {activeTelemetry?.is_breached ? 'Tamper Alert' : live ? 'Live location' : 'Location offline'}
+                <span className={`h-2 w-2 rounded-full ${
+                  activeTelemetry?.is_breached 
+                    ? 'bg-danger animate-ping' 
+                    : hasFix 
+                    ? 'bg-meadow animate-pulse' 
+                    : isPoweredOn 
+                    ? 'bg-amber-500 animate-pulse' 
+                    : 'bg-muted'
+                }`} />
+                {activeTelemetry?.is_breached 
+                  ? 'Tamper Alert' 
+                  : hasFix 
+                  ? 'Live location' 
+                  : isPoweredOn 
+                  ? 'Seeking GPS' 
+                  : 'Location offline'}
               </div>
               <div className="mt-0.5 max-w-[130px] truncate text-xs text-muted">
                 {activePet?.name || 'No pet selected'}
@@ -715,7 +765,8 @@ export default function OwnerDashboard() {
               activePet={activePet}
               activeTelemetry={activeTelemetry}
               activeSafety={activeSafety}
-              live={live}
+              isPoweredOn={isPoweredOn}
+              hasFix={hasFix}
               now={now}
               bpmValue={bpmValue}
               spo2Value={spo2Value}
@@ -767,6 +818,7 @@ export default function OwnerDashboard() {
         open={Boolean(selectedBroadcast)}
         onClose={() => setSelectedBroadcast(null)}
         onRescue={handleRescuePet}
+        onResolve={handleResolveAlert}
         currentUserId={currentUser?.uid}
       />
 
@@ -823,7 +875,7 @@ export default function OwnerDashboard() {
 
         {panel === 'health' && (
           <SlidePanel title="Health stream" subtitle={activePet?.name} onClose={() => setPanel('home')} wide>
-            {biometricHistory.length > 0 ? (
+            {isPoweredOn && biometricHistory.length > 0 ? (
               <div className="h-[48vh] min-h-[220px] bg-canvas rounded-2xl p-3 border border-linen">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={biometricHistory} margin={{ top: 12, right: 12, left: -20, bottom: 0 }}>
@@ -850,8 +902,8 @@ export default function OwnerDashboard() {
             ) : (
               <EmptyState
                 icon={<Heartbeat size={28} weight="fill" />}
-                title="Waiting for a heartbeat"
-                body={`Once ${activePet?.name || 'your pet'}’s collar starts sending data, the live chart appears here.`}
+                title={isPoweredOn ? "Waiting for a heartbeat" : "Collar is offline"}
+                body={isPoweredOn ? `Waiting for incoming biometric stream from ${activePet?.name || 'your pet'}...` : `Turn on ${activePet?.name || 'your pet'}’s collar to view live biometric telemetry.`}
               />
             )}
           </SlidePanel>
@@ -1012,7 +1064,7 @@ function SlidePanel({ title, subtitle, onClose, children, wide }) {
   );
 }
 
-function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmValue, spo2Value, batteryValue, biometricHistory, onAdd, onBroadcast, onShowQR }) {
+function HealthCard({ activePet, activeTelemetry, activeSafety, isPoweredOn, hasFix, now, bpmValue, spo2Value, batteryValue, biometricHistory, onAdd, onBroadcast, onShowQR }) {
   if (!activePet) {
     return (
       <div className="bg-surface border border-linen rounded-[28px] p-4">
@@ -1028,7 +1080,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
 
   const breached = (!activeSafety.isSafe && !activeSafety.unknown) || activeTelemetry?.is_breached;
   const spo2Tone = spo2Value && spo2Value < 94 ? 'danger' : 'meadow';
-  const batTone = !live ? 'muted' : batteryValue < 20 ? 'danger' : 'meadow';
+  const batTone = !isPoweredOn ? 'muted' : batteryValue < 20 ? 'danger' : 'meadow';
 
   return (
     <div className="bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
@@ -1042,14 +1094,26 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
           breached ? 'bg-danger-soft text-danger' : 'bg-meadow-soft text-meadow'
         }`}>
           {breached ? <WarningOctagon size={12} weight="fill" /> : <ShieldCheck size={12} weight="fill" />}
-          {activeTelemetry?.is_breached ? 'Collar Breached' : breached ? 'Outside zones' : activeSafety.matchedZone ? activeSafety.matchedZone.name : 'No zones yet'}
+          {activeTelemetry?.is_breached 
+            ? 'Collar Breached' 
+            : !isPoweredOn
+            ? 'Collar Offline'
+            : !hasFix
+            ? 'Collar Active'
+            : breached 
+            ? 'Outside zones' 
+            : activeSafety.matchedZone 
+            ? activeSafety.matchedZone.name 
+            : 'Inside zone'}
         </span>
       </div>
 
       <div className="flex items-center justify-between gap-2 mb-3">
-        <div className={`flex items-center gap-1.5 text-xs ${live ? 'text-meadow' : 'text-muted'}`}>
-          {live ? <WifiHigh size={14} /> : <WifiSlash size={14} />}
-          {formatLastSeen(activeTelemetry?.lastPingTime, now)}
+        <div className={`flex items-center gap-1.5 text-xs ${isPoweredOn ? (hasFix ? 'text-meadow font-semibold' : 'text-amber-600 font-semibold') : 'text-muted'}`}>
+          {isPoweredOn ? <WifiHigh size={14} /> : <WifiSlash size={14} />}
+          {isPoweredOn 
+            ? (hasFix ? 'Collar Online & Locked' : 'Collar Powered On · Gathering Location...') 
+            : formatLastSeen(activeTelemetry?.lastPingTime, now)}
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -1072,12 +1136,12 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
       <div className="mb-3 rounded-2xl border border-linen bg-night p-3 text-canvas">
         <div className="mb-2 flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-canvas/70">
-            <span className={`h-2 w-2 rounded-full ${live ? 'bg-meadow animate-pulse' : 'bg-canvas/40'}`} />
+            <span className={`h-2 w-2 rounded-full ${isPoweredOn ? 'bg-meadow animate-pulse' : 'bg-canvas/40'}`} />
             Live health trend
           </div>
           <span className="font-mono text-[10px] text-canvas/50">BPM / SpO2</span>
         </div>
-        {live && biometricHistory.length > 1 ? (
+        {isPoweredOn && biometricHistory.length > 0 ? (
           <div className="h-20">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={biometricHistory} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
@@ -1103,7 +1167,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
           </div>
         ) : (
           <div className="flex h-20 items-center justify-center rounded-xl border border-dashed border-canvas/20 text-xs text-canvas/55">
-            Collar is offline
+            {isPoweredOn ? 'Waiting for biometric stream...' : 'Collar is offline'}
           </div>
         )}
       </div>
@@ -1112,24 +1176,24 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, live, now, bpmVa
         <MetricRow 
           icon={<Heartbeat size={16} className="text-copper" />} 
           label="Heart rate" 
-          value={live ? (activeTelemetry?.bpm ?? '--') : '--'} 
-          unit={live ? 'BPM' : ''} 
-          percent={live ? (bpmValue / 200) * 100 : 0} 
+          value={isPoweredOn && activeTelemetry?.bpm !== undefined && activeTelemetry?.bpm !== null && activeTelemetry?.bpm !== '--' ? activeTelemetry.bpm : '--'} 
+          unit={isPoweredOn && activeTelemetry?.bpm !== undefined && activeTelemetry?.bpm !== null && activeTelemetry?.bpm !== '--' ? 'BPM' : ''} 
+          percent={(bpmValue / 200) * 100} 
         />
         <MetricRow 
           icon={<Drop size={16} className="text-meadow" />} 
           label="Blood oxygen" 
-          value={live ? (activeTelemetry?.spo2 ?? '--') : '--'} 
-          unit={live ? '%' : ''} 
-          percent={live ? spo2Value : 0} 
+          value={isPoweredOn && activeTelemetry?.spo2 !== undefined && activeTelemetry?.spo2 !== null && activeTelemetry?.spo2 !== '--' ? activeTelemetry.spo2 : '--'} 
+          unit={isPoweredOn && activeTelemetry?.spo2 !== undefined && activeTelemetry?.spo2 !== null && activeTelemetry?.spo2 !== '--' ? '%' : ''} 
+          percent={spo2Value} 
           tone={spo2Tone} 
         />
         <MetricRow 
           icon={<BatteryCharging size={16} className="text-meadow" />} 
           label="Collar battery" 
-          value={live ? (activeTelemetry?.battery ?? '--') : '--'} 
-          unit={live ? '%' : ''} 
-          percent={live ? batteryValue : 0} 
+          value={isPoweredOn && activeTelemetry?.battery !== undefined && activeTelemetry?.battery !== null && activeTelemetry?.battery !== '--' ? activeTelemetry.battery : '--'} 
+          unit={isPoweredOn && activeTelemetry?.battery !== undefined && activeTelemetry?.battery !== null && activeTelemetry?.battery !== '--' ? '%' : ''} 
+          percent={batteryValue} 
           tone={batTone} 
         />
       </div>
@@ -1148,8 +1212,10 @@ function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect,
         {pets.length === 0 && <p className="text-sm text-muted">Your pets will show up here.</p>}
         {pets.map((pet) => {
           const telemetry = devicesData[pet.id_tag];
-          const petOnline = telemetry?.status === 'online' && telemetry?.lastPingTime != null && isLive(telemetry.lastPingTime, now);
-          const safety = telemetry?.lat != null && petOnline ? checkPetSafety(telemetry.lat, telemetry.lng, safezones) : { isSafe: true, unknown: true };
+          const isPowered = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 12000) : false;
+          const isGpsLocked = Boolean(telemetry?.gps_locked);
+          const hasLocation = telemetry?.lat != null && telemetry?.lng != null;
+          const safety = hasLocation && isPowered && isGpsLocked ? checkPetSafety(telemetry.lat, telemetry.lng, safezones) : { isSafe: true, unknown: true };
           const selected = activePetId === pet.id;
           const isBreached = telemetry?.is_breached;
 
@@ -1166,20 +1232,30 @@ function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect,
                 className="flex-1 text-left"
               >
                 <div className="font-semibold text-sm">{pet.name}</div>
-                <div className={`text-xs ${selected ? 'text-canvas/60' : 'text-muted'}`}>{pet.type} · {formatLastSeen(telemetry?.lastPingTime, now)}</div>
+                <div className={`text-xs ${selected ? 'text-canvas/60' : 'text-muted'}`}>
+                  {pet.type} · {isPowered ? (isGpsLocked ? 'GPS Locked' : 'Seeking GPS') : formatLastSeen(telemetry?.lastPingTime, now)}
+                </div>
               </button>
               
               <div className="flex items-center gap-1.5">
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
                   isBreached
                     ? 'bg-danger text-white'
-                    : !petOnline
+                    : !isPowered
                     ? 'bg-night/10 text-muted'
+                    : !isGpsLocked
+                    ? 'bg-amber-500/15 text-amber-600'
                     : !safety.isSafe && !safety.unknown
                     ? 'bg-danger/15 text-danger'
                     : 'bg-meadow/15 text-meadow'
                 }`}>
-                  {isBreached ? 'BREACH' : !petOnline ? 'OFF' : (!safety.isSafe && !safety.unknown ? 'OUT' : 'OK')}
+                  {isBreached 
+                    ? 'BREACH' 
+                    : !isPowered 
+                    ? 'OFF' 
+                    : !isGpsLocked 
+                    ? 'SEEKING' 
+                    : (!safety.isSafe && !safety.unknown ? 'OUT' : 'OK')}
                 </span>
                 <button
                   type="button"

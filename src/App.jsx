@@ -6,6 +6,7 @@ import Login from './pages/Login';
 import AdminDashboard from './pages/AdminDashboard';
 import OwnerDashboard from './pages/OwnerDashboard';
 import PendingApproval from './pages/PendingApproval';
+import VerifyPet from './pages/VerifyPet';
 import ScreenLoader from './components/ui/ScreenLoader';
 
 function ProtectedRoute({ children, allowedRole }) {
@@ -60,6 +61,7 @@ export default function App() {
           <Route path="/" element={<Login />} />
           <Route path="/login" element={<Login />} />
           <Route path="/pending" element={<PendingRoute />} />
+          <Route path="/verify-pet/:petId" element={<VerifyPet />} />
           <Route
             path="/admin"
             element={
