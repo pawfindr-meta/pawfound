@@ -66,6 +66,10 @@ export default function Login() {
       } catch (_) {}
       recaptchaVerifierRef.current = null;
     }
+    const container = document.getElementById('recaptcha-container');
+    if (container) {
+      container.innerHTML = '';
+    }
   };
 
   useEffect(() => {
@@ -76,13 +80,15 @@ export default function Login() {
     return <ScreenLoader message="Welcome back…" />;
   }
 
-  const createRecaptcha = () => {
+  // Flushes the container element and provides a clean verifier to prevent re-render collisions
+  const getCleanRecaptcha = () => {
     destroyRecaptcha();
+
     const config = {
       size: 'invisible',
       callback: () => {},
       'expired-callback': () => {
-        setError('reCAPTCHA expired. Please try clicking submit again.');
+        setError('Verification expired. Please click submit again.');
         destroyRecaptcha();
       },
     };
@@ -102,6 +108,7 @@ export default function Login() {
   // STEP 1: Process Login OR Trigger SMS for Register
   const handleAuth = async (e) => {
     e.preventDefault();
+    if (busy) return;
     setError('');
     setMessage('');
     setBusy(true);
@@ -116,7 +123,7 @@ export default function Login() {
         }
 
         const formattedPhone = formatToE164(rawPhone);
-        const verifier = createRecaptcha();
+        const verifier = getCleanRecaptcha();
 
         if (!verifier) {
           throw new Error('Could not initialize reCAPTCHA verifier. Please refresh the page.');
@@ -150,6 +157,7 @@ export default function Login() {
   // STEP 2: Verify SMS OTP & Auto-Approve Account
   const handleVerifyOtpAndCreateAccount = async (e) => {
     e.preventDefault();
+    if (busy) return;
     setError('');
     setMessage('');
     setBusy(true);
@@ -172,7 +180,7 @@ export default function Login() {
       const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
       const user = userCredential.user;
 
-      // 3. Save profile to Firestore with is_approved: true
+      // 3. Save profile to Firestore with is_approved: true (Instant access)
       await setDoc(doc(db, 'users', user.uid), {
         email: user.email.toLowerCase(),
         username: username.toLowerCase().trim(),
@@ -184,7 +192,7 @@ export default function Login() {
         phone_number: formatToE164(phone.trim()),
         phone_verified: true,
         role: 'owner',
-        is_approved: true, // Auto-approved upon phone OTP verification
+        is_approved: true,
         created_at: new Date().toISOString(),
       });
 
@@ -192,7 +200,7 @@ export default function Login() {
       setIsOtpStep(false);
       destroyRecaptcha();
 
-      // Clear input state
+      // Clear input fields
       setFirstName('');
       setMiddleName('');
       setLastName('');
@@ -220,7 +228,7 @@ export default function Login() {
   return (
     <div className="w-full min-h-screen bg-night relative flex items-center justify-center p-4 sm:p-6 py-12 sm:py-8 overflow-y-auto">
       {/* Invisible reCAPTCHA Anchor */}
-      <div id="recaptcha-container" className="invisible"></div>
+      <div id="recaptcha-container"></div>
 
       {/* Faulty Terminal Background */}
       <div className="fixed inset-0 z-0 flex items-center justify-center pointer-events-none">
