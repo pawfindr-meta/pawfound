@@ -191,9 +191,9 @@ export default function OwnerDashboard() {
           lastReceivedTimeRef.current[pet.id_tag] = Date.now();
         }
 
-        const isGpsLocked = Boolean(data.gps_locked) && typeof data.lat === 'number' && typeof data.lng === 'number';
-        const lat = isGpsLocked ? data.lat : null;
-        const lng = isGpsLocked ? data.lng : null;
+        const isGpsLocked = data.gps_locked === true || data.gps_locked === 'true';
+        const lat = typeof data.lat === 'number' ? data.lat : null;
+        const lng = typeof data.lng === 'number' ? data.lng : null;
 
         setDevicesData((prev) => ({
           ...prev,
@@ -534,19 +534,21 @@ export default function OwnerDashboard() {
 
   const activeTelemetry = activePet?.id_tag ? devicesData[activePet.id_tag] : null;
 
-  // Heartbeat freshness: powered on ONLY if ping received within the last 12 seconds
+  // Heartbeat freshness: powered on if ping received within 15 seconds
   const isPoweredOn = activeTelemetry?.lastPingTime 
-    ? (now - activeTelemetry.lastPingTime < 12000) 
+    ? (now - activeTelemetry.lastPingTime < 15000) 
     : false;
 
-  // Genuine GPS lock check
-  const hasFix = isPoweredOn && Boolean(activeTelemetry?.gps_locked) && activeTelemetry?.lat != null && activeTelemetry?.lng != null;
+  // Has valid coordinates (either live satellite lock or last recorded location)
+  const hasCoordinates = activeTelemetry?.lat != null && activeTelemetry?.lng != null;
+  const hasFix = isPoweredOn && Boolean(activeTelemetry?.gps_locked) && hasCoordinates;
   
-  const activeSafety = activePet && hasFix
+  const activeSafety = activePet && hasCoordinates
     ? checkPetSafety(activeTelemetry.lat, activeTelemetry.lng, safezones)
     : { isSafe: true, matchedZone: null, unknown: true };
 
-  const mapCenter = hasFix
+  // Center map on the pet if coordinates exist, otherwise center on home safe zone
+  const mapCenter = hasCoordinates
     ? [activeTelemetry.lat, activeTelemetry.lng]
     : (safezones[0] ? [safezones[0].lat, safezones[0].lng] : DEFAULT_MAP_CENTER);
 
@@ -634,7 +636,7 @@ export default function OwnerDashboard() {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" 
                 attribution="&copy; OpenStreetMap contributors" 
               />
-              <MapUpdater center={mapCenter} follow={followPet && !isPlacingOnMap && hasFix} />
+              <MapUpdater center={mapCenter} follow={followPet && !isPlacingOnMap && hasCoordinates} />
               <MapClickHandler isPlacingMode={isPlacingOnMap} onMapClick={handleMapPinSelected} />
 
               {safezones.map((sz) => (
@@ -647,28 +649,31 @@ export default function OwnerDashboard() {
                 return <Polyline key={`trail-${pet.id}`} positions={trail} pathOptions={{ color: '#C45C26', weight: 3, opacity: 0.7 }} />;
               })}
 
+              {/* Renders pet marker whenever valid coordinates exist (live or simulated or last known) */}
               {pets.map((pet) => {
                 const telemetry = devicesData[pet.id_tag];
-                const petPowered = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 12000) : false;
-                
-                // Only render pin on the map if device is powered on AND genuine GPS lock exists
-                if (!petPowered || !telemetry?.gps_locked || telemetry?.lat == null || telemetry?.lng == null) return null;
+                if (telemetry?.lat == null || telemetry?.lng == null) return null;
+
+                const petPowered = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 15000) : false;
+                const hasSignal = petPowered;
                 const safety = checkPetSafety(telemetry.lat, telemetry.lng, safezones);
                 const selected = activePetId === pet.id;
+                const isBreached = Boolean(telemetry?.is_breached);
+
                 return (
                   <Marker
                     key={pet.id}
                     position={[telemetry.lat, telemetry.lng]}
-                    icon={createPetMarkerIcon(selected, (!safety.isSafe && !safety.unknown) || telemetry.is_breached, petPowered)}
+                    icon={createPetMarkerIcon(selected, (!safety.isSafe && !safety.unknown) || isBreached, hasSignal)}
                     eventHandlers={{ click: () => { setActivePetId(pet.id); setFollowPet(true); } }}
                   >
                     <Popup className="custom-leaflet-popup">
                       <div className="text-sm p-1">
                         <strong className="text-copper">{pet.name}</strong>
                         <div className={`mt-1 font-medium ${
-                          telemetry.is_breached
+                          isBreached
                             ? 'text-danger font-bold'
-                            : !petPowered
+                            : !hasSignal
                             ? 'text-muted'
                             : !safety.isSafe && !safety.unknown
                             ? 'text-danger'
@@ -676,10 +681,10 @@ export default function OwnerDashboard() {
                             ? 'text-meadow'
                             : 'text-muted'
                         }`}>
-                          {telemetry.is_breached
+                          {isBreached
                             ? 'Collar Tampered / Breached'
-                            : !petPowered
-                            ? 'Collar is offline'
+                            : !hasSignal
+                            ? 'Collar offline (Last known location)'
                             : !safety.isSafe && !safety.unknown
                             ? 'Outside every zone'
                             : safety.matchedZone
@@ -1212,10 +1217,11 @@ function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect,
         {pets.length === 0 && <p className="text-sm text-muted">Your pets will show up here.</p>}
         {pets.map((pet) => {
           const telemetry = devicesData[pet.id_tag];
-          const isPowered = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 12000) : false;
+          const petHasRecent = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 15000) : false;
+          const isPowered = petHasRecent;
           const isGpsLocked = Boolean(telemetry?.gps_locked);
           const hasLocation = telemetry?.lat != null && telemetry?.lng != null;
-          const safety = hasLocation && isPowered && isGpsLocked ? checkPetSafety(telemetry.lat, telemetry.lng, safezones) : { isSafe: true, unknown: true };
+          const safety = hasLocation && isPowered ? checkPetSafety(telemetry.lat, telemetry.lng, safezones) : { isSafe: true, unknown: true };
           const selected = activePetId === pet.id;
           const isBreached = telemetry?.is_breached;
 
