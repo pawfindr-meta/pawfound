@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { signOut } from 'firebase/auth';
-import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, deleteDoc, getDocs, getDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, setDoc, addDoc, deleteDoc, getDocs, getDoc } from 'firebase/firestore';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -8,12 +8,11 @@ import {
   CheckCircle, Target, Power, WarningOctagon, Megaphone, Phone, Heartbeat, Drop, BatteryCharging
 } from '@phosphor-icons/react';
 import { auth, db } from '../firebase';
-import { telemetryThrottler } from '../utils/dbThrottler';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import BroadcastDetailModal from '../components/BroadcastDetailModal';
 
-// Visible tabs for everyday administration (Failsafe Simulator is hidden from this list)
+// Visible navigation tabs (Failsafe Simulator is concealed inside the Admin icon)
 const NAV = [
   { id: 'approvals', icon: UsersThree, label: 'People' },
   { id: 'pets', icon: PawPrint, label: 'Pets' },
@@ -40,6 +39,7 @@ export default function AdminDashboard() {
 
   const simStateRef = useRef({});
   const timerRef = useRef(null);
+  const simPingCounterRef = useRef(1000);
 
   useEffect(() => {
     const q = query(collection(db, 'users'), where('role', '==', 'owner'));
@@ -98,6 +98,21 @@ export default function AdminDashboard() {
       setSelectedPetIds((prev) => prev.filter((id) => !ownerPetIds.includes(id)));
     } else {
       setSelectedPetIds((prev) => Array.from(new Set([...prev, ...ownerPetIds])));
+    }
+  };
+
+  // Helper to push failsafe telemetry directly to Firestore with full schema alignment
+  const updateDeviceTelemetry = async (idTag, payload) => {
+    simPingCounterRef.current += 1;
+    const fullPayload = {
+      ...payload,
+      ping_count: simPingCounterRef.current,
+      last_updated: new Date().toISOString(),
+    };
+    try {
+      await setDoc(doc(db, 'devices', idTag), fullPayload, { merge: true });
+    } catch (err) {
+      console.error('Error writing simulated telemetry:', err);
     }
   };
 
@@ -217,17 +232,21 @@ export default function AdminDashboard() {
     for (const pet of activePets) {
       if (turnOn) {
         const currentCoord = simStateRef.current[pet.id_tag] || { lat: baseLat, lng: baseLng };
-        telemetryThrottler.queueTelemetry(pet.id_tag, {
+        await updateDeviceTelemetry(pet.id_tag, {
           lat: parseFloat(currentCoord.lat.toFixed(6)),
           lng: parseFloat(currentCoord.lng.toFixed(6)),
-          bpm: 86,
+          gps_locked: true, // Ensures live map fix displays
+          bpm: 84,
           spo2: 98,
           battery: 95,
           status: 'online',
           is_breached: false,
         });
       } else {
-        await telemetryThrottler.setDeviceOffline(pet.id_tag);
+        await setDoc(doc(db, 'devices', pet.id_tag), {
+          status: 'offline',
+          last_updated: new Date(Date.now() - 30000).toISOString(), // Forces heartbeat timeout
+        }, { merge: true });
       }
     }
 
@@ -242,7 +261,7 @@ export default function AdminDashboard() {
     toast.success(turnOn ? `Turned ON collar for ${activePets.length} pet(s)` : `Turned OFF collar for ${activePets.length} pet(s)`);
   };
 
-  const handlePlaceInSafezone = () => {
+  const handlePlaceInSafezone = async () => {
     if (selectedPetIds.length === 0) {
       toast.error('Select at least one pet to place into the safe zone.');
       return;
@@ -268,7 +287,8 @@ export default function AdminDashboard() {
 
     const distanceMultiplier = placementOffset === 'center' ? 0.15 : placementOffset === 'inner' ? 0.65 : 0.98;
 
-    activePets.forEach((pet, index) => {
+    for (let index = 0; index < activePets.length; index++) {
+      const pet = activePets[index];
       const angle = (index * (360 / activePets.length) * Math.PI) / 180;
       const targetDistMeters = Math.min(zoneRadiusMeters * distanceMultiplier, zoneRadiusMeters - 2);
 
@@ -287,16 +307,17 @@ export default function AdminDashboard() {
         isEscaping: false,
       };
 
-      telemetryThrottler.queueTelemetry(pet.id_tag, {
+      await updateDeviceTelemetry(pet.id_tag, {
         lat: parseFloat(placedLat.toFixed(6)),
         lng: parseFloat(placedLng.toFixed(6)),
+        gps_locked: true,
         bpm: 85,
         spo2: 98,
         battery: 95,
         status: 'online',
         is_breached: false,
       });
-    });
+    }
 
     toast.success(`Placed ${activePets.length} pet(s) into “${targetZone.name}”!`);
   };
@@ -314,15 +335,11 @@ export default function AdminDashboard() {
     }
 
     for (const pet of activePets) {
-      try {
-        await updateDoc(doc(db, 'devices', pet.id_tag), {
-          status: 'offline',
-          is_breached: true,
-          last_updated: new Date().toISOString(),
-        });
-      } catch (err) {
-        await telemetryThrottler.setDeviceOffline(pet.id_tag);
-      }
+      await setDoc(doc(db, 'devices', pet.id_tag), {
+        status: 'offline',
+        is_breached: true,
+        last_updated: new Date().toISOString(),
+      }, { merge: true });
 
       if (simStateRef.current[pet.id_tag]) {
         delete simStateRef.current[pet.id_tag];
@@ -343,7 +360,10 @@ export default function AdminDashboard() {
       for (const petId of selectedPetIds) {
         const pet = allPets.find((p) => p.id === petId);
         if (pet?.id_tag) {
-          telemetryThrottler.setDeviceOffline(pet.id_tag);
+          setDoc(doc(db, 'devices', pet.id_tag), {
+            status: 'offline',
+            last_updated: new Date(Date.now() - 30000).toISOString(),
+          }, { merge: true });
         }
       }
       toast.info('Failsafe simulation paused. Devices set offline.');
@@ -387,6 +407,7 @@ export default function AdminDashboard() {
       setIsSimulating(true);
       toast.success(`Realistic movement running for ${activePets.length} pet(s)!`);
 
+      // 3.5s update loop: pushes coordinates, ping_count, and gps_locked
       timerRef.current = setInterval(() => {
         activePets.forEach((pet) => {
           const state = simStateRef.current[pet.id_tag];
@@ -436,12 +457,13 @@ export default function AdminDashboard() {
           state.lat = nextLat;
           state.lng = nextLng;
 
-          const dynamicBpm = Math.floor(88 + Math.random() * 22);
+          const dynamicBpm = Math.floor(84 + Math.random() * 16);
           const dynamicSpo2 = Math.floor(96 + Math.random() * 3);
 
-          telemetryThrottler.queueTelemetry(pet.id_tag, {
+          updateDeviceTelemetry(pet.id_tag, {
             lat: parseFloat(nextLat.toFixed(6)),
             lng: parseFloat(nextLng.toFixed(6)),
+            gps_locked: true,
             bpm: dynamicBpm,
             spo2: dynamicSpo2,
             battery: 94,
@@ -449,7 +471,7 @@ export default function AdminDashboard() {
             is_breached: false,
           });
         });
-      }, 4500);
+      }, 3500);
     }
   };
 
