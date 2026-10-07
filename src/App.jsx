@@ -25,7 +25,8 @@ function ProtectedRoute({ children, allowedRole }) {
     return <ScreenLoader message="Checking your account…" />;
   }
 
-  if (userData.role === 'owner' && !userData.is_approved) {
+  // Only route to pending if an admin explicitly paused the owner account
+  if (userData.role === 'owner' && userData.is_approved === false) {
     return <Navigate to="/pending" replace />;
   }
 
@@ -42,7 +43,8 @@ function PendingRoute() {
   if (loading) return <ScreenLoader />;
   if (!currentUser) return <Navigate to="/login" replace />;
   if (userData?.role === 'admin') return <Navigate to="/admin" replace />;
-  if (userData?.role === 'owner' && userData.is_approved) return <Navigate to="/dashboard" replace />;
+  // If approved, go directly to the owner dashboard
+  if (userData?.role === 'owner' && userData.is_approved !== false) return <Navigate to="/dashboard" replace />;
   return <PendingApproval />;
 }
 
@@ -64,7 +66,7 @@ export default function App() {
           <Route path="/pending" element={<PendingRoute />} />
           <Route path="/verify-pet/:petId" element={<VerifyPet />} />
           
-          {/* Direct Walker Companion Route (accessible immediately without login blocks) */}
+          {/* Direct Walker Companion Route */}
           <Route path="/walker" element={<WalkerDashboard />} />
 
           <Route
