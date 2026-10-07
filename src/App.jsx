@@ -36,21 +36,6 @@ function ProtectedRoute({ children, allowedRole }) {
   return children;
 }
 
-// Allows any logged-in user (owner or admin) to access the Walker phone testing companion
-function WalkerRoute() {
-  const { currentUser, loading } = useAuth();
-
-  if (loading) {
-    return <ScreenLoader message="Opening Walker Companion…" />;
-  }
-
-  if (!currentUser) {
-    return <Navigate to="/login" replace />;
-  }
-
-  return <WalkerDashboard />;
-}
-
 function PendingRoute() {
   const { currentUser, userData, loading } = useAuth();
 
@@ -79,8 +64,8 @@ export default function App() {
           <Route path="/pending" element={<PendingRoute />} />
           <Route path="/verify-pet/:petId" element={<VerifyPet />} />
           
-          {/* Direct Walker Companion Route */}
-          <Route path="/walker" element={<WalkerRoute />} />
+          {/* Direct Walker Companion Route (accessible immediately without login blocks) */}
+          <Route path="/walker" element={<WalkerDashboard />} />
 
           <Route
             path="/admin"
