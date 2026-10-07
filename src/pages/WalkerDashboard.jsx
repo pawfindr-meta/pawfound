@@ -3,8 +3,8 @@ import { signOut } from 'firebase/auth';
 import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
 import { toast } from 'sonner';
 import {
-  PawPrint, NavigationArrow, Play, Pause, Power, SignOut,
-  MapPin, Heartbeat, Drop, BatteryCharging, WarningOctagon
+  PawPrint, Play, Pause, Power, SignOut,
+  Heartbeat, Drop, BatteryCharging, WarningOctagon, PencilSimple
 } from '@phosphor-icons/react';
 import { auth, db } from '../firebase';
 import Button from '../components/ui/Button';
@@ -12,6 +12,9 @@ import Button from '../components/ui/Button';
 export default function WalkerDashboard() {
   const [pets, setPets] = useState([]);
   const [selectedPetId, setSelectedPetId] = useState('');
+  const [manualCollarTag, setManualCollarTag] = useState('COLLAR01');
+  const [useManualTag, setUseManualTag] = useState(false);
+
   const [isWalkerOnline, setIsWalkerOnline] = useState(false);
   const [isWalking, setIsWalking] = useState(false);
   const [lastCoords, setLastCoords] = useState(null);
@@ -23,32 +26,66 @@ export default function WalkerDashboard() {
   const latestCoordsRef = useRef(null);
   const pingCounterRef = useRef(1);
 
-  // Fetch all registered pets with linked collar IDs
+  // Fetch registered pets (Direct query + Admin Shared Config fallback)
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'pets'), (snapshot) => {
-      const list = [];
-      snapshot.forEach((d) => {
-        const data = d.data();
-        if (data.id_tag) list.push({ id: d.id, ...data });
-      });
-      setPets(list);
-      if (list.length > 0 && !selectedPetId) {
-        setSelectedPetId(list[0].id);
+    // 1. Direct query against 'pets'
+    const unsubPets = onSnapshot(
+      collection(db, 'pets'),
+      (snapshot) => {
+        const list = [];
+        snapshot.forEach((d) => {
+          const data = d.data();
+          if (data.id_tag) list.push({ id: d.id, ...data });
+        });
+        if (list.length > 0) {
+          setPets(list);
+          setSelectedPetId((prev) => prev || list[0].id);
+          setUseManualTag(false);
+        }
+      },
+      (err) => {
+        console.warn('Direct pets query restricted, listening to Admin shared config...');
       }
-    });
-    return () => unsub();
-  }, [selectedPetId]);
+    );
 
-  const activePet = pets.find((p) => p.id === selectedPetId) || pets[0];
+    // 2. Fallback: Listen to the shared list published by Admin
+    const unsubShared = onSnapshot(
+      doc(db, 'system_config', 'walker_shared_pets'),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data?.pets && data.pets.length > 0) {
+            setPets((prev) => (prev.length > 0 ? prev : data.pets));
+            setSelectedPetId((prev) => prev || data.pets[0].id);
+            setUseManualTag(false);
+          }
+        }
+      },
+      (err) => console.warn('Shared config read note:', err)
+    );
+
+    return () => {
+      unsubPets();
+      unsubShared();
+    };
+  }, []);
+
+  const activePet = pets.find((p) => p.id === selectedPetId);
+  const activeCollarId = useManualTag 
+    ? manualCollarTag.trim() 
+    : (activePet?.id_tag || manualCollarTag.trim());
 
   // Transmit telemetry matching the ESP32 packet schema
   const transmitCollarPacket = async (coords, isLiveWalk = true) => {
-    if (!activePet?.id_tag) return;
+    if (!activeCollarId) {
+      toast.error('Please specify a Collar ID Tag.');
+      return;
+    }
 
     pingCounterRef.current += 1;
     setPingCounter(pingCounterRef.current);
 
-    const simulatedBpm = isLiveWalk ? Math.floor(92 + Math.random() * 20) : 82;
+    const simulatedBpm = isLiveWalk ? Math.floor(92 + Math.random() * 20) : 84;
     const simulatedSpo2 = Math.floor(97 + Math.random() * 2);
 
     const payload = {
@@ -66,17 +103,18 @@ export default function WalkerDashboard() {
     };
 
     try {
-      await setDoc(doc(db, 'devices', activePet.id_tag), payload, { merge: true });
+      await setDoc(doc(db, 'devices', activeCollarId), payload, { merge: true });
       setLastPushedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     } catch (err) {
       console.error('Failed to transmit walker telemetry:', err);
+      toast.error('Failed to push to Firebase.');
     }
   };
 
   // Toggle Collar Power
   const handleToggleWalkerPower = async () => {
-    if (!activePet?.id_tag) {
-      toast.error('Please select a pet with an assigned collar tag.');
+    if (!activeCollarId) {
+      toast.error('Please provide a valid Collar ID Tag.');
       return;
     }
 
@@ -84,16 +122,16 @@ export default function WalkerDashboard() {
       if (isWalking) handleStopWalk();
       setIsWalkerOnline(false);
 
-      await setDoc(doc(db, 'devices', activePet.id_tag), {
+      await setDoc(doc(db, 'devices', activeCollarId), {
         status: 'offline',
         last_updated: new Date(Date.now() - 30000).toISOString(),
       }, { merge: true });
 
-      toast.info(`Collar ${activePet.id_tag} powered down.`);
+      toast.info(`Collar ${activeCollarId} powered OFF.`);
     } else {
       setIsWalkerOnline(true);
       await transmitCollarPacket(latestCoordsRef.current, false);
-      toast.success(`Collar ${activePet.id_tag} is now active & ready!`);
+      toast.success(`Collar ${activeCollarId} is now active & ready!`);
     }
   };
 
@@ -109,22 +147,18 @@ export default function WalkerDashboard() {
     }
 
     setIsWalking(true);
-    toast.success('Live walk started! Pushing phone GPS every 10s.');
+    toast.success('Live walk started! Streaming phone GPS every 10s.');
 
-    // Watch position from phone GPS
     geoWatchIdRef.current = navigator.geolocation.watchPosition(
       (pos) => {
         const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         latestCoordsRef.current = c;
         setLastCoords(c);
       },
-      (err) => {
-        console.warn('GPS reading error:', err);
-      },
+      (err) => console.warn('GPS reading error:', err),
       { enableHighAccuracy: true, maximumAge: 2000, timeout: 8000 }
     );
 
-    // Initial transmission
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
@@ -135,7 +169,6 @@ export default function WalkerDashboard() {
       () => {}
     );
 
-    // 10-second sync loop
     pushIntervalRef.current = setInterval(() => {
       if (latestCoordsRef.current) {
         transmitCollarPacket(latestCoordsRef.current, true);
@@ -157,8 +190,8 @@ export default function WalkerDashboard() {
   };
 
   const handleTriggerBreach = async () => {
-    if (!activePet?.id_tag) return;
-    await setDoc(doc(db, 'devices', activePet.id_tag), {
+    if (!activeCollarId) return;
+    await setDoc(doc(db, 'devices', activeCollarId), {
       status: 'offline',
       is_breached: true,
       last_updated: new Date().toISOString(),
@@ -175,6 +208,7 @@ export default function WalkerDashboard() {
 
   return (
     <div className="w-full min-h-screen bg-canvas text-ink flex flex-col p-3 sm:p-5 max-w-lg mx-auto">
+      {/* Header */}
       <header className="flex justify-between items-center bg-surface border border-linen px-4 py-3 rounded-2xl shrink-0 shadow-sm mb-4">
         <div className="flex items-center gap-2.5">
           <div className="w-9 h-9 rounded-xl bg-copper text-white flex items-center justify-center font-bold">
@@ -185,39 +219,68 @@ export default function WalkerDashboard() {
             <p className="text-[11px] text-muted mt-0.5">Field Walker Companion</p>
           </div>
         </div>
-        <button
-          onClick={() => signOut(auth)}
-          className="p-2 text-muted hover:text-danger rounded-xl hover:bg-danger-soft transition"
-          title="Sign out"
-        >
-          <SignOut size={18} weight="bold" />
-        </button>
+        {auth.currentUser && (
+          <button
+            onClick={() => signOut(auth)}
+            className="p-2 text-muted hover:text-danger rounded-xl hover:bg-danger-soft transition"
+            title="Sign out"
+          >
+            <SignOut size={18} weight="bold" />
+          </button>
+        )}
       </header>
 
-      {/* Pet Selector */}
+      {/* Target Pet / Collar Tag Selector */}
       <div className="bg-surface border border-linen rounded-2xl p-4 mb-4 shadow-sm">
-        <label className="text-xs font-bold uppercase tracking-wider text-muted block mb-1.5">
-          Target Pet & Collar
-        </label>
-        <select
-          value={selectedPetId}
-          onChange={(e) => {
-            if (isWalking) handleStopWalk();
-            setSelectedPetId(e.target.value);
-          }}
-          disabled={isWalking}
-          className="w-full bg-canvas border border-linen rounded-xl px-3 py-2.5 text-sm font-semibold text-ink outline-none focus:border-copper"
-        >
-          {pets.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name} ({p.type}) — Collar ID: {p.id_tag}
-            </option>
-          ))}
-        </select>
-        {activePet && (
-          <p className="text-xs text-muted mt-2">
-            Broadcasting as: <span className="font-mono font-bold text-copper">{activePet.id_tag}</span>
-          </p>
+        <div className="flex justify-between items-center mb-1.5">
+          <label className="text-xs font-bold uppercase tracking-wider text-muted">
+            Target Collar Device
+          </label>
+          <button
+            type="button"
+            onClick={() => setUseManualTag((v) => !v)}
+            className="text-[11px] text-copper font-semibold flex items-center gap-1 hover:underline"
+          >
+            <PencilSimple size={13} />
+            {useManualTag ? 'Use Pet Dropdown' : 'Enter Tag Manually'}
+          </button>
+        </div>
+
+        {useManualTag || pets.length === 0 ? (
+          <div>
+            <input
+              type="text"
+              value={manualCollarTag}
+              onChange={(e) => setManualCollarTag(e.target.value.toUpperCase())}
+              disabled={isWalking}
+              placeholder="e.g. COLLAR01"
+              className="w-full bg-canvas border border-linen rounded-xl px-3 py-2.5 text-sm font-mono font-bold text-copper outline-none focus:border-copper"
+            />
+            <p className="text-[11px] text-muted mt-1.5">
+              Testing collar tag: <span className="font-mono font-bold text-copper">{activeCollarId}</span>
+            </p>
+          </div>
+        ) : (
+          <div>
+            <select
+              value={selectedPetId}
+              onChange={(e) => {
+                if (isWalking) handleStopWalk();
+                setSelectedPetId(e.target.value);
+              }}
+              disabled={isWalking}
+              className="w-full bg-canvas border border-linen rounded-xl px-3 py-2.5 text-sm font-semibold text-ink outline-none focus:border-copper"
+            >
+              {pets.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} ({p.type}) {p.id_tag ? `— Tag: ${p.id_tag}` : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted mt-1.5">
+              Broadcasting as: <span className="font-mono font-bold text-copper">{activeCollarId}</span>
+            </p>
+          </div>
         )}
       </div>
 
@@ -294,12 +357,12 @@ export default function WalkerDashboard() {
           <div className="bg-canvas border border-linen rounded-xl p-2.5 flex flex-col items-center">
             <Heartbeat size={18} className="text-copper mb-1" />
             <span className="text-[10px] text-muted">Heart Rate</span>
-            <span className="font-bold text-sm text-ink">{isWalking ? '104' : '82'} BPM</span>
+            <span className="font-bold text-sm text-ink">{isWalking ? '104' : '84'} BPM</span>
           </div>
           <div className="bg-canvas border border-linen rounded-xl p-2.5 flex flex-col items-center">
             <Drop size={18} className="text-meadow mb-1" />
             <span className="text-[10px] text-muted">Blood O2</span>
-            <span className="font-bold text-sm text-ink">98%</span>
+            <span className="font-bold text-sm text-ink">97%</span>
           </div>
           <div className="bg-canvas border border-linen rounded-xl p-2.5 flex flex-col items-center">
             <BatteryCharging size={18} className="text-amber mb-1" />

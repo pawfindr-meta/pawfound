@@ -60,6 +60,26 @@ export default function AdminDashboard() {
     return () => unsubscribe();
   }, []);
 
+  // SYNC PETS TO SHARED WALKER CONFIG (Allows unauthenticated phone companion to see the pet list)
+  useEffect(() => {
+    if (allPets.length === 0) return;
+    const simplifiedPets = allPets
+      .filter((p) => p.id_tag)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        type: p.type || 'Pet',
+        id_tag: p.id_tag,
+      }));
+
+    if (simplifiedPets.length > 0) {
+      setDoc(doc(db, 'system_config', 'walker_shared_pets'), {
+        pets: simplifiedPets,
+        updated_at: new Date().toISOString(),
+      }, { merge: true }).catch((err) => console.warn('Could not sync shared pets for walker:', err));
+    }
+  }, [allPets]);
+
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'safe_zones'), (snapshot) => {
       const szData = [];
