@@ -28,7 +28,6 @@ export default function WalkerDashboard() {
 
   // Fetch registered pets (Direct query + Admin Shared Config fallback)
   useEffect(() => {
-    // 1. Direct query against 'pets'
     const unsubPets = onSnapshot(
       collection(db, 'pets'),
       (snapshot) => {
@@ -43,12 +42,11 @@ export default function WalkerDashboard() {
           setUseManualTag(false);
         }
       },
-      (err) => {
-        console.warn('Direct pets query restricted, listening to Admin shared config...');
+      () => {
+        console.warn('Direct pets query restricted, relying on shared admin config...');
       }
     );
 
-    // 2. Fallback: Listen to the shared list published by Admin
     const unsubShared = onSnapshot(
       doc(db, 'system_config', 'walker_shared_pets'),
       (docSnap) => {
@@ -61,7 +59,7 @@ export default function WalkerDashboard() {
           }
         }
       },
-      (err) => console.warn('Shared config read note:', err)
+      (err) => console.warn('Shared config note:', err)
     );
 
     return () => {
@@ -107,7 +105,6 @@ export default function WalkerDashboard() {
       setLastPushedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     } catch (err) {
       console.error('Failed to transmit walker telemetry:', err);
-      toast.error('Failed to push to Firebase.');
     }
   };
 
@@ -135,7 +132,7 @@ export default function WalkerDashboard() {
     }
   };
 
-  // Start Live Walk (Streams Phone GPS Every 10 Seconds)
+  // Start Live Walk (Actively polls & pushes fresh phone GPS every 10 seconds)
   const handleStartWalk = () => {
     if (!navigator.geolocation) {
       toast.error('Geolocation is not supported by your browser.');
@@ -149,30 +146,51 @@ export default function WalkerDashboard() {
     setIsWalking(true);
     toast.success('Live walk started! Streaming phone GPS every 10s.');
 
+    // Helper: Actively queries fresh GPS and transmits directly
+    const captureAndTransmitLocation = () => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const freshCoords = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+          };
+          latestCoordsRef.current = freshCoords;
+          setLastCoords(freshCoords);
+          transmitCollarPacket(freshCoords, true);
+        },
+        (err) => {
+          console.warn('GPS reading warning:', err.message);
+          // If a new fix fails momentarily, fall back to the last known position
+          if (latestCoordsRef.current) {
+            transmitCollarPacket(latestCoordsRef.current, true);
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 9000,
+          maximumAge: 0, // FORCES phone GPS to calculate fresh position without caching
+        }
+      );
+    };
+
+    // 1. Initial immediate transmission
+    captureAndTransmitLocation();
+
+    // 2. Continuous background GPS listener
     geoWatchIdRef.current = navigator.geolocation.watchPosition(
       (pos) => {
         const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         latestCoordsRef.current = c;
         setLastCoords(c);
       },
-      (err) => console.warn('GPS reading error:', err),
-      { enableHighAccuracy: true, maximumAge: 2000, timeout: 8000 }
+      (err) => console.warn('watchPosition update note:', err.message),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 9000 }
     );
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        latestCoordsRef.current = c;
-        setLastCoords(c);
-        transmitCollarPacket(c, true);
-      },
-      () => {}
-    );
-
+    // 3. Guaranteed 10-second active sampling loop
+    if (pushIntervalRef.current) clearInterval(pushIntervalRef.current);
     pushIntervalRef.current = setInterval(() => {
-      if (latestCoordsRef.current) {
-        transmitCollarPacket(latestCoordsRef.current, true);
-      }
+      captureAndTransmitLocation();
     }, 10000);
   };
 

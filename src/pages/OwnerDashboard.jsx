@@ -52,7 +52,9 @@ function createMissingBeaconIcon() {
 function MapUpdater({ center, follow }) {
   const map = useMap();
   useEffect(() => {
-    if (follow && center?.[0] && center?.[1]) map.setView(center, map.getZoom());
+    if (follow && center?.[0] && center?.[1]) {
+      map.setView(center, map.getZoom(), { animate: true });
+    }
   }, [center, follow, map]);
   return null;
 }
@@ -176,6 +178,7 @@ export default function OwnerDashboard() {
 
   const activePet = pets.find((p) => p.id === activePetId) || pets[0];
 
+  // Dynamic Telemetry and Location Updates
   useEffect(() => {
     if (pets.length === 0) return;
     const unsubs = pets.map((pet) => {
@@ -184,7 +187,7 @@ export default function OwnerDashboard() {
         if (!docSnap.exists()) return;
         const data = docSnap.data();
 
-        // Detect live heartbeat pulse directly via browser clock
+        // Detect live incoming telemetry pulse
         const currentCount = data.ping_count ?? data.last_updated;
         if (currentCount !== undefined && currentCount !== lastPingCountRef.current[pet.id_tag]) {
           lastPingCountRef.current[pet.id_tag] = currentCount;
@@ -206,7 +209,7 @@ export default function OwnerDashboard() {
             battery: data.battery !== undefined && data.battery !== null ? data.battery : '--',
             status: data.status || 'offline',
             is_breached: Boolean(data.is_breached),
-            lastPingTime: lastReceivedTimeRef.current[pet.id_tag] || null,
+            lastPingTime: lastReceivedTimeRef.current[pet.id_tag] || Date.now(),
           },
         }));
 
@@ -214,8 +217,8 @@ export default function OwnerDashboard() {
           setPositionTrails((prev) => {
             const currentTrail = prev[pet.id_tag] || [];
             const lastPos = currentTrail[currentTrail.length - 1];
-            if (!lastPos || lastPos[0] !== lat || lastPos[1] !== lng) {
-              return { ...prev, [pet.id_tag]: [...currentTrail, [lat, lng]].slice(-25) };
+            if (!lastPos || Math.abs(lastPos[0] - lat) > 0.00001 || Math.abs(lastPos[1] - lng) > 0.00001) {
+              return { ...prev, [pet.id_tag]: [...currentTrail, [lat, lng]].slice(-30) };
             }
             return prev;
           });
@@ -534,12 +537,11 @@ export default function OwnerDashboard() {
 
   const activeTelemetry = activePet?.id_tag ? devicesData[activePet.id_tag] : null;
 
-  // Heartbeat freshness: powered on if ping received within 15 seconds
+  // Heartbeat freshness: powered on if ping received within 20 seconds
   const isPoweredOn = activeTelemetry?.lastPingTime 
-    ? (now - activeTelemetry.lastPingTime < 15000) 
+    ? (now - activeTelemetry.lastPingTime < 20000) 
     : false;
 
-  // Has valid coordinates (either live satellite lock or last recorded location)
   const hasCoordinates = activeTelemetry?.lat != null && activeTelemetry?.lng != null;
   const hasFix = isPoweredOn && Boolean(activeTelemetry?.gps_locked) && hasCoordinates;
   
@@ -547,7 +549,6 @@ export default function OwnerDashboard() {
     ? checkPetSafety(activeTelemetry.lat, activeTelemetry.lng, safezones)
     : { isSafe: true, matchedZone: null, unknown: true };
 
-  // Center map on the pet if coordinates exist, otherwise center on home safe zone
   const mapCenter = hasCoordinates
     ? [activeTelemetry.lat, activeTelemetry.lng]
     : (safezones[0] ? [safezones[0].lat, safezones[0].lng] : DEFAULT_MAP_CENTER);
@@ -649,12 +650,11 @@ export default function OwnerDashboard() {
                 return <Polyline key={`trail-${pet.id}`} positions={trail} pathOptions={{ color: '#C45C26', weight: 3, opacity: 0.7 }} />;
               })}
 
-              {/* Renders pet marker whenever valid coordinates exist (live or simulated or last known) */}
               {pets.map((pet) => {
                 const telemetry = devicesData[pet.id_tag];
                 if (telemetry?.lat == null || telemetry?.lng == null) return null;
 
-                const petPowered = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 15000) : false;
+                const petPowered = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 20000) : false;
                 const hasSignal = petPowered;
                 const safety = checkPetSafety(telemetry.lat, telemetry.lng, safezones);
                 const selected = activePetId === pet.id;
@@ -1217,7 +1217,7 @@ function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect,
         {pets.length === 0 && <p className="text-sm text-muted">Your pets will show up here.</p>}
         {pets.map((pet) => {
           const telemetry = devicesData[pet.id_tag];
-          const petHasRecent = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 15000) : false;
+          const petHasRecent = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 20000) : false;
           const isPowered = petHasRecent;
           const isGpsLocked = Boolean(telemetry?.gps_locked);
           const hasLocation = telemetry?.lat != null && telemetry?.lng != null;
