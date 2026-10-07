@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   UsersThree, PawPrint, Cpu, Lightning, SignOut, Play, Pause, MapPin, Check, X,
-  CheckCircle, Target, Power, WarningOctagon, Megaphone, Phone, Heartbeat, Drop, BatteryCharging
+  CheckCircle, Target, Power, WarningOctagon, Megaphone, Phone, Heartbeat, Drop, BatteryCharging, Trash
 } from '@phosphor-icons/react';
 import { auth, db } from '../firebase';
 import Button from '../components/ui/Button';
@@ -113,6 +113,53 @@ export default function AdminDashboard() {
       await setDoc(doc(db, 'devices', idTag), fullPayload, { merge: true });
     } catch (err) {
       console.error('Error writing simulated telemetry:', err);
+    }
+  };
+
+  // ============================================================
+  // OWNER DELETION HANDLER (CASCADING PURGE)
+  // ============================================================
+  const handleDeleteOwner = async (ownerId, ownerName) => {
+    const confirmed = window.confirm(
+      `Permanently delete owner "${ownerName}" and all associated pets, collar registrations, and safety zones? This cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    try {
+      // 1. Query pets belonging to owner
+      const petQuery = query(collection(db, 'pets'), where('owner_id', '==', ownerId));
+      const petSnap = await getDocs(petQuery);
+      const deletePromises = [];
+
+      for (const petDoc of petSnap.docs) {
+        const petId = petDoc.id;
+        const petData = petDoc.data();
+
+        deletePromises.push(deleteDoc(doc(db, 'pets', petId)));
+        deletePromises.push(deleteDoc(doc(db, 'public_pets', petId)));
+
+        if (petData.id_tag) {
+          deletePromises.push(deleteDoc(doc(db, 'devices', petData.id_tag)));
+        }
+
+        const bQuery = query(collection(db, 'broadcasts'), where('pet_id', '==', petId));
+        const bSnap = await getDocs(bQuery);
+        bSnap.docs.forEach((b) => deletePromises.push(deleteDoc(b.ref)));
+      }
+
+      // 2. Safe zones
+      const szQuery = query(collection(db, 'safe_zones'), where('owner_id', '==', ownerId));
+      const szSnap = await getDocs(szQuery);
+      szSnap.docs.forEach((sz) => deletePromises.push(deleteDoc(sz.ref)));
+
+      // 3. User document
+      deletePromises.push(deleteDoc(doc(db, 'users', ownerId)));
+
+      await Promise.all(deletePromises);
+      toast.success(`Owner "${ownerName}" and all related data removed.`);
+    } catch (err) {
+      console.error('Error deleting owner:', err);
+      toast.error('Failed to delete owner account.');
     }
   };
 
@@ -235,7 +282,7 @@ export default function AdminDashboard() {
         await updateDeviceTelemetry(pet.id_tag, {
           lat: parseFloat(currentCoord.lat.toFixed(6)),
           lng: parseFloat(currentCoord.lng.toFixed(6)),
-          gps_locked: true, // Ensures live map fix displays
+          gps_locked: true,
           bpm: 84,
           spo2: 98,
           battery: 95,
@@ -245,7 +292,7 @@ export default function AdminDashboard() {
       } else {
         await setDoc(doc(db, 'devices', pet.id_tag), {
           status: 'offline',
-          last_updated: new Date(Date.now() - 30000).toISOString(), // Forces heartbeat timeout
+          last_updated: new Date(Date.now() - 30000).toISOString(),
         }, { merge: true });
       }
     }
@@ -407,7 +454,6 @@ export default function AdminDashboard() {
       setIsSimulating(true);
       toast.success(`Realistic movement running for ${activePets.length} pet(s)!`);
 
-      // 3.5s update loop: pushes coordinates, ping_count, and gps_locked
       timerRef.current = setInterval(() => {
         activePets.forEach((pet) => {
           const state = simStateRef.current[pet.id_tag];
@@ -498,7 +544,7 @@ export default function AdminDashboard() {
       {/* Top Header / Sidebar */}
       <aside className="bg-night text-canvas p-2 rounded-[22px] flex flex-row md:flex-col gap-2 items-center justify-between md:justify-start shrink-0 w-full md:w-[72px] z-30">
         
-        {/* INVISIBLE / SECRET TRIGGER: Clicking the PF Admin badge opens Failsafe Mode */}
+        {/* INVISIBLE TRIGGER: Admin logo toggles the Failsafe Modal */}
         <button
           type="button"
           onClick={() => setIsFailsafeModalOpen((v) => !v)}
@@ -586,7 +632,12 @@ export default function AdminDashboard() {
                         <div>
                           <div className="font-semibold">{owner.first_name} {owner.last_name}</div>
                           <div className="text-xs text-copper">@{owner.username}</div>
-                          <div className="text-xs text-canvas/50 mt-1">{owner.email} · {owner.phone_number}</div>
+                          <div className="text-xs text-canvas/50 mt-1">
+                            {owner.email} · {owner.phone_number}
+                            {owner.phone_verified && (
+                              <span className="ml-2 text-meadow text-[11px] font-semibold">✓ SMS Verified</span>
+                            )}
+                          </div>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${owner.is_approved ? 'bg-meadow/20 text-meadow' : 'bg-amber/20 text-amber'}`}>
@@ -599,6 +650,14 @@ export default function AdminDashboard() {
                           >
                             {owner.is_approved ? <><X size={14} /> Pause</> : <><Check size={14} /> Approve</>}
                           </Button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteOwner(owner.id, `${owner.first_name} ${owner.last_name}`)}
+                            className="p-2 text-rose-400 hover:text-white hover:bg-rose-600 rounded-xl transition"
+                            title={`Delete ${owner.first_name}`}
+                          >
+                            <Trash size={16} weight="bold" />
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -711,7 +770,6 @@ export default function AdminDashboard() {
 
       {/* ============================================================ */}
       {/* INVISIBLE POPUP MODAL: FAILSAFE SIMULATOR & SOS CONTROLLER   */}
-      {/* Triggered exclusively by clicking the Admin logo             */}
       {/* ============================================================ */}
       <AnimatePresence>
         {isFailsafeModalOpen && (

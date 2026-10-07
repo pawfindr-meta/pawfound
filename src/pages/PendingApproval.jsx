@@ -42,13 +42,14 @@ export default function PendingApproval() {
           <div className="mx-auto w-14 h-14 rounded-2xl bg-amber-soft text-amber flex items-center justify-center mb-4">
             <Hourglass size={28} weight="duotone" />
           </div>
-          <h1 className="font-display text-2xl text-ink">You’re almost in</h1>
+          <h1 className="font-display text-2xl text-ink">You’re verified & almost in</h1>
           <p className="text-muted text-sm mt-2 leading-relaxed">
-            Hi {userData?.first_name || 'there'}. Your owner account is waiting for a quick review.
-            We’ll unlock your dashboard as soon as an admin approves it — no need to register again.
+            Hi {userData?.first_name || 'there'}. Your mobile number has been verified via SMS.
+            Your account is now queued for administrative approval — no need to register again.
           </p>
-          <div className="mt-6 rounded-2xl bg-linen/70 px-4 py-3 text-sm text-ink">
-            We’ll email <span className="font-semibold">{userData?.email}</span> when you’re approved.
+          <div className="mt-6 rounded-2xl bg-linen/70 px-4 py-3 text-sm text-ink flex flex-col gap-1">
+            <div>Mobile: <span className="font-mono font-semibold text-copper">{userData?.phone_number || 'N/A'}</span></div>
+            <div className="text-xs text-muted">Email: {userData?.email}</div>
           </div>
           <Button variant="secondary" className="w-full mt-6" onClick={() => signOut(auth)}>
             <SignOut size={16} weight="bold" />
