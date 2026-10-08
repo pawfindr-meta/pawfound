@@ -26,36 +26,74 @@ export default function WalkerDashboard() {
   const latestCoordsRef = useRef(null);
   const pingCounterRef = useRef(1);
 
-  // Fetch registered pets (Direct query + Admin Shared Config fallback)
+  // Fetch registered pets across all users (public_pets + pets + system_config fallback)
   useEffect(() => {
+    const petMap = new Map();
+
+    const updatePetsList = () => {
+      const merged = Array.from(petMap.values());
+      if (merged.length > 0) {
+        setPets(merged);
+        setSelectedPetId((prev) => {
+          if (prev && merged.some((p) => p.id === prev)) return prev;
+          return merged[0].id;
+        });
+        setUseManualTag(false);
+      }
+    };
+
+    // 1. Primary: public_pets (always publicly readable across all users without auth restrictions)
+    const unsubPublic = onSnapshot(
+      collection(db, 'public_pets'),
+      (snapshot) => {
+        snapshot.forEach((d) => {
+          const data = d.data();
+          petMap.set(d.id, {
+            id: d.id,
+            name: data.name || 'Unnamed Pet',
+            type: data.type || 'Pet',
+            id_tag: data.id_tag || data.tag_id || '',
+            owner_name: data.owner_name || '',
+          });
+        });
+        updatePetsList();
+      },
+      (err) => console.warn('public_pets query error:', err)
+    );
+
+    // 2. Direct 'pets' collection
     const unsubPets = onSnapshot(
       collection(db, 'pets'),
       (snapshot) => {
-        const list = [];
         snapshot.forEach((d) => {
           const data = d.data();
-          if (data.id_tag) list.push({ id: d.id, ...data });
+          const existing = petMap.get(d.id) || {};
+          petMap.set(d.id, {
+            id: d.id,
+            name: data.name || existing.name || 'Unnamed Pet',
+            type: data.type || existing.type || 'Pet',
+            id_tag: data.id_tag || data.tag_id || existing.id_tag || '',
+            owner_name: data.owner_name || existing.owner_name || '',
+          });
         });
-        if (list.length > 0) {
-          setPets(list);
-          setSelectedPetId((prev) => prev || list[0].id);
-          setUseManualTag(false);
-        }
+        updatePetsList();
       },
-      () => {
-        console.warn('Direct pets query restricted, relying on shared admin config...');
-      }
+      () => console.warn('Direct pets query restricted, relying on public registry.')
     );
 
+    // 3. Fallback: Admin shared configuration document
     const unsubShared = onSnapshot(
       doc(db, 'system_config', 'walker_shared_pets'),
       (docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data();
-          if (data?.pets && data.pets.length > 0) {
-            setPets((prev) => (prev.length > 0 ? prev : data.pets));
-            setSelectedPetId((prev) => prev || data.pets[0].id);
-            setUseManualTag(false);
+          if (Array.isArray(data?.pets)) {
+            data.pets.forEach((p) => {
+              if (p?.id && !petMap.has(p.id)) {
+                petMap.set(p.id, p);
+              }
+            });
+            updatePetsList();
           }
         }
       },
@@ -63,6 +101,7 @@ export default function WalkerDashboard() {
     );
 
     return () => {
+      unsubPublic();
       unsubPets();
       unsubShared();
     };
@@ -71,7 +110,7 @@ export default function WalkerDashboard() {
   const activePet = pets.find((p) => p.id === selectedPetId);
   const activeCollarId = useManualTag 
     ? manualCollarTag.trim() 
-    : (activePet?.id_tag || manualCollarTag.trim());
+    : (activePet?.id_tag?.trim() || manualCollarTag.trim() || 'COLLAR01');
 
   // Transmit telemetry matching the ESP32 packet schema
   const transmitCollarPacket = async (coords, isLiveWalk = true) => {
@@ -146,7 +185,6 @@ export default function WalkerDashboard() {
     setIsWalking(true);
     toast.success('Live walk started! Streaming phone GPS every 10s.');
 
-    // Helper: Actively queries fresh GPS and transmits directly
     const captureAndTransmitLocation = () => {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
@@ -160,7 +198,6 @@ export default function WalkerDashboard() {
         },
         (err) => {
           console.warn('GPS reading warning:', err.message);
-          // If a new fix fails momentarily, fall back to the last known position
           if (latestCoordsRef.current) {
             transmitCollarPacket(latestCoordsRef.current, true);
           }
@@ -168,7 +205,7 @@ export default function WalkerDashboard() {
         {
           enableHighAccuracy: true,
           timeout: 9000,
-          maximumAge: 0, // FORCES phone GPS to calculate fresh position without caching
+          maximumAge: 0,
         }
       );
     };
@@ -291,12 +328,15 @@ export default function WalkerDashboard() {
             >
               {pets.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} ({p.type}) {p.id_tag ? `— Tag: ${p.id_tag}` : ''}
+                  {p.name} ({p.type}) {p.id_tag ? `— Tag: ${p.id_tag}` : '— (No tag assigned)'} {p.owner_name ? `· ${p.owner_name}` : ''}
                 </option>
               ))}
             </select>
             <p className="text-[11px] text-muted mt-1.5">
               Broadcasting as: <span className="font-mono font-bold text-copper">{activeCollarId}</span>
+              {!activePet?.id_tag && (
+                <span className="text-amber-500 ml-1.5 font-medium">(No tag on pet; using fallback {activeCollarId})</span>
+              )}
             </p>
           </div>
         )}
