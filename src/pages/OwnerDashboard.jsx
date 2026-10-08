@@ -52,7 +52,7 @@ function createMissingBeaconIcon() {
 function MapUpdater({ center, follow }) {
   const map = useMap();
   useEffect(() => {
-    if (follow && center?.[0] && center?.[1]) {
+    if (follow && center?.[0] != null && center?.[1] != null && !isNaN(center[0]) && !isNaN(center[1])) {
       map.setView(center, map.getZoom(), { animate: true });
     }
   }, [center, follow, map]);
@@ -128,8 +128,6 @@ export default function OwnerDashboard() {
 
   const breachedPetsRef = useRef(new Set());
   const prevDeviceStateRef = useRef({});
-  const lastReceivedTimeRef = useRef({});
-  const lastPingCountRef = useRef({});
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   useEffect(() => {
@@ -178,53 +176,74 @@ export default function OwnerDashboard() {
 
   const activePet = pets.find((p) => p.id === activePetId) || pets[0];
 
+  // Universal helper for reading normalized device telemetry
+  const getPetTelemetry = (tag) => {
+    if (!tag) return null;
+    const cleanTag = String(tag).trim().toUpperCase();
+    return devicesData[cleanTag] || devicesData[tag] || null;
+  };
+
+  // Universal helper for reading normalized position trails
+  const getPetTrail = (tag) => {
+    if (!tag) return [];
+    const cleanTag = String(tag).trim().toUpperCase();
+    return positionTrails[cleanTag] || positionTrails[tag] || [];
+  };
+
   // Dynamic Telemetry and Location Updates
   useEffect(() => {
     if (pets.length === 0) return;
     const unsubs = pets.map((pet) => {
-      if (!pet.id_tag) return () => {};
-      return onSnapshot(doc(db, 'devices', pet.id_tag), (docSnap) => {
+      const collarTag = String(pet.id_tag || '').trim().toUpperCase();
+      if (!collarTag) return () => {};
+
+      return onSnapshot(doc(db, 'devices', collarTag), (docSnap) => {
         if (!docSnap.exists()) return;
         const data = docSnap.data();
 
-        // Detect live incoming telemetry pulse
-        const currentCount = data.ping_count ?? data.last_updated;
-        if (currentCount !== undefined && currentCount !== lastPingCountRef.current[pet.id_tag]) {
-          lastPingCountRef.current[pet.id_tag] = currentCount;
-          lastReceivedTimeRef.current[pet.id_tag] = Date.now();
-        }
-
         const isGpsLocked = data.gps_locked === true || data.gps_locked === 'true';
-        const lat = typeof data.lat === 'number' ? data.lat : null;
-        const lng = typeof data.lng === 'number' ? data.lng : null;
+        const rawLat = typeof data.lat === 'number' ? data.lat : parseFloat(data.lat);
+        const rawLng = typeof data.lng === 'number' ? data.lng : parseFloat(data.lng);
+        const lat = !isNaN(rawLat) ? rawLat : null;
+        const lng = !isNaN(rawLng) ? rawLng : null;
+
+        const parsedTime = data.last_updated ? new Date(data.last_updated).getTime() : Date.now();
+
+        const updatedTelemetry = {
+          lat,
+          lng,
+          gps_locked: isGpsLocked,
+          bpm: data.bpm !== undefined && data.bpm !== null ? data.bpm : '--',
+          spo2: data.spo2 !== undefined && data.spo2 !== null ? data.spo2 : '--',
+          battery: data.battery !== undefined && data.battery !== null ? data.battery : '--',
+          status: data.status || 'offline',
+          is_breached: Boolean(data.is_breached),
+          lastPingTime: parsedTime,
+        };
 
         setDevicesData((prev) => ({
           ...prev,
-          [pet.id_tag]: {
-            lat,
-            lng,
-            gps_locked: isGpsLocked,
-            bpm: data.bpm !== undefined && data.bpm !== null ? data.bpm : '--',
-            spo2: data.spo2 !== undefined && data.spo2 !== null ? data.spo2 : '--',
-            battery: data.battery !== undefined && data.battery !== null ? data.battery : '--',
-            status: data.status || 'offline',
-            is_breached: Boolean(data.is_breached),
-            lastPingTime: lastReceivedTimeRef.current[pet.id_tag] || Date.now(),
-          },
+          [collarTag]: updatedTelemetry,
+          ...(pet.id_tag ? { [pet.id_tag]: updatedTelemetry } : {}),
         }));
 
         if (lat != null && lng != null) {
           setPositionTrails((prev) => {
-            const currentTrail = prev[pet.id_tag] || [];
+            const currentTrail = prev[collarTag] || prev[pet.id_tag] || [];
             const lastPos = currentTrail[currentTrail.length - 1];
             if (!lastPos || Math.abs(lastPos[0] - lat) > 0.00001 || Math.abs(lastPos[1] - lng) > 0.00001) {
-              return { ...prev, [pet.id_tag]: [...currentTrail, [lat, lng]].slice(-30) };
+              const updatedTrail = [...currentTrail, [lat, lng]].slice(-30);
+              return {
+                ...prev,
+                [collarTag]: updatedTrail,
+                ...(pet.id_tag ? { [pet.id_tag]: updatedTrail } : {}),
+              };
             }
             return prev;
           });
         }
 
-        if (activePet && pet.id_tag === activePet.id_tag) {
+        if (activePet && (pet.id === activePet.id || collarTag === String(activePet.id_tag || '').trim().toUpperCase())) {
           if (data.bpm && data.spo2 && data.bpm !== '--' && data.spo2 !== '--') {
             const timeString = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             setBiometricHistory((prev) => [...prev, { time: timeString, bpm: data.bpm, spo2: data.spo2 }].slice(-20));
@@ -238,7 +257,7 @@ export default function OwnerDashboard() {
   useEffect(() => {
     if (safezones.length === 0) return;
     pets.forEach((pet) => {
-      const telemetry = devicesData[pet.id_tag];
+      const telemetry = getPetTelemetry(pet.id_tag);
       if (!telemetry || telemetry.status === 'offline' || telemetry.lat == null || telemetry.lng == null) return;
       const safety = checkPetSafety(telemetry.lat, telemetry.lng, safezones);
 
@@ -274,10 +293,11 @@ export default function OwnerDashboard() {
   useEffect(() => {
     pets.forEach((pet) => {
       if (!pet.id_tag) return;
-      const currentTelemetry = devicesData[pet.id_tag];
+      const collarTag = String(pet.id_tag).trim().toUpperCase();
+      const currentTelemetry = getPetTelemetry(collarTag);
       if (!currentTelemetry) return;
 
-      const previous = prevDeviceStateRef.current[pet.id_tag];
+      const previous = prevDeviceStateRef.current[collarTag];
       const isBreachedNow = currentTelemetry.is_breached;
       const wasOnline = previous?.status === 'online';
       const isNowOffline = currentTelemetry.status === 'offline';
@@ -299,7 +319,7 @@ export default function OwnerDashboard() {
         });
       }
 
-      prevDeviceStateRef.current[pet.id_tag] = {
+      prevDeviceStateRef.current[collarTag] = {
         status: currentTelemetry.status,
         is_breached: currentTelemetry.is_breached,
       };
@@ -308,9 +328,10 @@ export default function OwnerDashboard() {
 
   const handleBroadcastMissing = async (pet) => {
     if (!pet) return;
-    const telemetry = devicesData[pet.id_tag] || {};
-    const fallbackLat = safezones[0]?.lat || 14.5995;
-    const fallbackLng = safezones[0]?.lng || 120.9842;
+    const collarTag = String(pet.id_tag || '').trim().toUpperCase();
+    const telemetry = getPetTelemetry(collarTag) || {};
+    const fallbackLat = safezones[0]?.lat || DEFAULT_MAP_CENTER?.[0] || 14.5995;
+    const fallbackLng = safezones[0]?.lng || DEFAULT_MAP_CENTER?.[1] || 120.9842;
 
     const lat = typeof telemetry.lat === 'number' ? telemetry.lat : fallbackLat;
     const lng = typeof telemetry.lng === 'number' ? telemetry.lng : fallbackLng;
@@ -323,7 +344,7 @@ export default function OwnerDashboard() {
 
       await addDoc(collection(db, 'broadcasts'), {
         pet_id: pet.id,
-        id_tag: pet.id_tag || '',
+        id_tag: collarTag,
         owner_id: currentUser.uid,
         owner_name: `${userData?.first_name || 'Pet'} ${userData?.last_name || 'Owner'}`,
         owner_phone: userData?.phone_number || 'N/A',
@@ -460,9 +481,17 @@ export default function OwnerDashboard() {
     toast.success('Zone removed');
   };
 
+  // MANDATORY COLLAR TAG REGISTRATION
   const handleAddPet = async (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
+    const collarTag = String(formData.get('id_tag') || '').trim().toUpperCase();
+
+    if (!collarTag) {
+      toast.error('Collar Tag ID is mandatory.');
+      return;
+    }
+
     try {
       const petDocRef = await addDoc(collection(db, 'pets'), {
         owner_id: currentUser.uid,
@@ -470,7 +499,7 @@ export default function OwnerDashboard() {
         type: formData.get('pet_type'),
         breed: formData.get('pet_breed'),
         age: formData.get('pet_age'),
-        id_tag: (formData.get('id_tag') || '').trim(),
+        id_tag: collarTag,
         is_missing: false,
         created_at: new Date().toISOString(),
       });
@@ -480,7 +509,7 @@ export default function OwnerDashboard() {
         type: formData.get('pet_type'),
         breed: formData.get('pet_breed'),
         age: formData.get('pet_age'),
-        id_tag: (formData.get('id_tag') || '').trim(),
+        id_tag: collarTag,
         owner_name: `${userData?.first_name || 'Pet'} ${userData?.last_name || 'Owner'}`,
         owner_phone: userData?.phone_number || 'N/A',
         created_at: new Date().toISOString(),
@@ -506,18 +535,21 @@ export default function OwnerDashboard() {
       const bDeletions = bSnap.docs.map((bDoc) => deleteDoc(bDoc.ref));
       await Promise.all(bDeletions);
 
-      if (idTag) {
+      const collarTag = String(idTag || '').trim().toUpperCase();
+      if (collarTag) {
         try {
-          await deleteDoc(doc(db, 'devices', idTag));
+          await deleteDoc(doc(db, 'devices', collarTag));
         } catch (_) {}
 
         setPositionTrails((prev) => {
           const updated = { ...prev };
+          delete updated[collarTag];
           delete updated[idTag];
           return updated;
         });
         setDevicesData((prev) => {
           const updated = { ...prev };
+          delete updated[collarTag];
           delete updated[idTag];
           return updated;
         });
@@ -535,23 +567,32 @@ export default function OwnerDashboard() {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
 
-  const activeTelemetry = activePet?.id_tag ? devicesData[activePet.id_tag] : null;
+  // Safe telemetry lookup for selected active pet
+  const activeTelemetry = activePet?.id_tag ? getPetTelemetry(activePet.id_tag) : null;
 
-  // Heartbeat freshness: powered on if ping received within 20 seconds
-  const isPoweredOn = activeTelemetry?.lastPingTime 
-    ? (now - activeTelemetry.lastPingTime < 20000) 
+  // Online when status is 'online' or pinged within 3 minutes (grace period for background tabs)
+  const isPoweredOn = activeTelemetry 
+    ? (activeTelemetry.status === 'online' && (now - (activeTelemetry.lastPingTime || 0) < 180000))
     : false;
 
-  const hasCoordinates = activeTelemetry?.lat != null && activeTelemetry?.lng != null;
+  const hasCoordinates = activeTelemetry?.lat != null && activeTelemetry?.lng != null && !isNaN(activeTelemetry.lat) && !isNaN(activeTelemetry.lng);
   const hasFix = isPoweredOn && Boolean(activeTelemetry?.gps_locked) && hasCoordinates;
   
   const activeSafety = activePet && hasCoordinates
     ? checkPetSafety(activeTelemetry.lat, activeTelemetry.lng, safezones)
     : { isSafe: true, matchedZone: null, unknown: true };
 
+  const safeZoneCoords = (safezones[0]?.lat != null && safezones[0]?.lng != null && !isNaN(safezones[0].lat) && !isNaN(safezones[0].lng))
+    ? [Number(safezones[0].lat), Number(safezones[0].lng)]
+    : null;
+
+  const validFallbackCenter = (Array.isArray(DEFAULT_MAP_CENTER) && DEFAULT_MAP_CENTER.length === 2)
+    ? DEFAULT_MAP_CENTER
+    : [14.5995, 120.9842];
+
   const mapCenter = hasCoordinates
-    ? [activeTelemetry.lat, activeTelemetry.lng]
-    : (safezones[0] ? [safezones[0].lat, safezones[0].lng] : DEFAULT_MAP_CENTER);
+    ? [Number(activeTelemetry.lat), Number(activeTelemetry.lng)]
+    : (safeZoneCoords || validFallbackCenter);
 
   const bpmValue = isPoweredOn ? (parseFloat(activeTelemetry?.bpm) || 0) : 0;
   const spo2Value = isPoweredOn ? (parseFloat(activeTelemetry?.spo2) || 0) : 0;
@@ -645,17 +686,16 @@ export default function OwnerDashboard() {
               ))}
 
               {pets.map((pet) => {
-                const trail = positionTrails[pet.id_tag];
+                const trail = getPetTrail(pet.id_tag);
                 if (!trail || trail.length < 2) return null;
                 return <Polyline key={`trail-${pet.id}`} positions={trail} pathOptions={{ color: '#C45C26', weight: 3, opacity: 0.7 }} />;
               })}
 
               {pets.map((pet) => {
-                const telemetry = devicesData[pet.id_tag];
+                const telemetry = getPetTelemetry(pet.id_tag);
                 if (telemetry?.lat == null || telemetry?.lng == null) return null;
 
-                const petPowered = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 20000) : false;
-                const hasSignal = petPowered;
+                const hasSignal = telemetry.status === 'online' && (now - (telemetry.lastPingTime || 0) < 180000);
                 const safety = checkPetSafety(telemetry.lat, telemetry.lng, safezones);
                 const selected = activePetId === pet.id;
                 const isBreached = Boolean(telemetry?.is_breached);
@@ -790,6 +830,7 @@ export default function OwnerDashboard() {
               onSelect={setActivePetId} 
               onDelete={handleDeletePet}
               onShowQR={(pet) => setSelectedPetForQR(pet)}
+              getPetTelemetry={getPetTelemetry}
             />
           </div>
         </div>
@@ -834,7 +875,7 @@ export default function OwnerDashboard() {
               <EmptyState
                 icon={<PawPrint size={28} weight="fill" />}
                 title="Add your first pet"
-                body="Give them a name now. You can link a collar later when the hardware is ready."
+                body="Give them a name and link their collar ID to start tracking."
                 action={<Button onClick={() => setIsAddPetModalOpen(true)}>Add a pet</Button>}
               />
             ) : (
@@ -851,7 +892,7 @@ export default function OwnerDashboard() {
                     >
                       <div className="font-semibold text-sm">{p.name}</div>
                       <div className="text-sm text-muted">{p.type} · {p.breed || 'Mixed'} · {p.age} yrs</div>
-                      <div className="text-[11px] text-copper mt-0.5">{p.id_tag ? `Collar ${p.id_tag}` : 'No collar linked'}</div>
+                      <div className="text-[11px] text-copper font-mono font-bold mt-0.5">Collar {p.id_tag}</div>
                     </button>
                     <div className="flex items-center gap-1">
                       <button
@@ -879,7 +920,7 @@ export default function OwnerDashboard() {
         )}
 
         {panel === 'health' && (
-          <SlidePanel title="Health stream" subtitle={activePet?.name} onClose={() => setPanel('home')} wide>
+          <SlidePanel title="Health stream" subtitle={activePet?.name} onClose={() => setPanel('home')}>
             {isPoweredOn && biometricHistory.length > 0 ? (
               <div className="h-[48vh] min-h-[220px] bg-canvas rounded-2xl p-3 border border-linen">
                 <ResponsiveContainer width="100%" height="100%">
@@ -1006,10 +1047,11 @@ export default function OwnerDashboard() {
         )}
       </Modal>
 
-      <Modal open={isAddPetModalOpen} onClose={() => setIsAddPetModalOpen(false)} title="Add a pet" subtitle="A unique digital QR code will be generated automatically.">
+      {/* MANDATORY COLLAR TAG REGISTRATION MODAL */}
+      <Modal open={isAddPetModalOpen} onClose={() => setIsAddPetModalOpen(false)} title="Add a pet" subtitle="Every pet requires a Collar ID to link telemetry and GPS tracking.">
         <form onSubmit={handleAddPet} className="flex flex-col gap-3">
           <label className="text-xs font-semibold text-muted">Name *
-            <input name="pet_name" required className="mt-1 w-full bg-canvas border border-linen rounded-xl px-3 py-2 text-sm outline-none focus:border-copper" />
+            <input name="pet_name" required placeholder="e.g. Buddy" className="mt-1 w-full bg-canvas border border-linen rounded-xl px-3 py-2 text-sm outline-none focus:border-copper" />
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="text-xs font-semibold text-muted">Type *
@@ -1022,18 +1064,23 @@ export default function OwnerDashboard() {
               </select>
             </label>
             <label className="text-xs font-semibold text-muted">Breed
-              <input name="pet_breed" className="mt-1 w-full bg-canvas border border-linen rounded-xl px-3 py-2 text-sm outline-none" />
+              <input name="pet_breed" placeholder="e.g. Golden Retriever" className="mt-1 w-full bg-canvas border border-linen rounded-xl px-3 py-2 text-sm outline-none" />
             </label>
             <label className="text-xs font-semibold text-muted">Age *
-              <input type="number" name="pet_age" required className="mt-1 w-full bg-canvas border border-linen rounded-xl px-3 py-2 text-sm outline-none" />
+              <input type="number" name="pet_age" required placeholder="Years" className="mt-1 w-full bg-canvas border border-linen rounded-xl px-3 py-2 text-sm outline-none" />
             </label>
-            <label className="text-xs font-semibold text-muted">Collar ID
-              <input name="id_tag" placeholder="Optional" className="mt-1 w-full bg-canvas border border-linen rounded-xl px-3 py-2 text-sm font-mono outline-none" />
+            <label className="text-xs font-semibold text-muted">Collar Tag ID *
+              <input 
+                name="id_tag" 
+                required 
+                placeholder="e.g. COLLAR01" 
+                className="mt-1 w-full bg-canvas border border-linen rounded-xl px-3 py-2 text-sm font-mono font-bold uppercase tracking-wider outline-none focus:border-copper" 
+              />
             </label>
           </div>
           <div className="flex gap-2 mt-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsAddPetModalOpen(false)}>Cancel</Button>
-            <Button type="submit" className="flex-1">Save pet</Button>
+            <Button type="submit" className="flex-1">Save pet & Link Tag</Button>
           </div>
         </form>
       </Modal>
@@ -1206,7 +1253,7 @@ function HealthCard({ activePet, activeTelemetry, activeSafety, isPoweredOn, has
   );
 }
 
-function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect, onDelete, onShowQR }) {
+function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect, onDelete, onShowQR, getPetTelemetry }) {
   return (
     <div className="bg-surface border border-linen rounded-[28px] p-4 flex flex-col">
       <div className="flex justify-between mb-3">
@@ -1216,9 +1263,8 @@ function PetListCard({ pets, activePetId, devicesData, safezones, now, onSelect,
       <div className="flex flex-col gap-2">
         {pets.length === 0 && <p className="text-sm text-muted">Your pets will show up here.</p>}
         {pets.map((pet) => {
-          const telemetry = devicesData[pet.id_tag];
-          const petHasRecent = telemetry?.lastPingTime ? (now - telemetry.lastPingTime < 20000) : false;
-          const isPowered = petHasRecent;
+          const telemetry = getPetTelemetry ? getPetTelemetry(pet.id_tag) : (devicesData[pet.id_tag] || null);
+          const isPowered = telemetry ? (telemetry.status === 'online' && (now - (telemetry.lastPingTime || 0) < 180000)) : false;
           const isGpsLocked = Boolean(telemetry?.gps_locked);
           const hasLocation = telemetry?.lat != null && telemetry?.lng != null;
           const safety = hasLocation && isPowered ? checkPetSafety(telemetry.lat, telemetry.lng, safezones) : { isSafe: true, unknown: true };

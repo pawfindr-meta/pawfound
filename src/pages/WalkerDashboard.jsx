@@ -25,6 +25,7 @@ export default function WalkerDashboard() {
   const pushIntervalRef = useRef(null);
   const latestCoordsRef = useRef(null);
   const pingCounterRef = useRef(1);
+  const activeCollarIdRef = useRef('COLLAR01');
 
   // Fetch registered pets across all users (public_pets + pets + system_config fallback)
   useEffect(() => {
@@ -38,7 +39,6 @@ export default function WalkerDashboard() {
           if (prev && merged.some((p) => p.id === prev)) return prev;
           return merged[0].id;
         });
-        setUseManualTag(false);
       }
     };
 
@@ -48,13 +48,16 @@ export default function WalkerDashboard() {
       (snapshot) => {
         snapshot.forEach((d) => {
           const data = d.data();
-          petMap.set(d.id, {
-            id: d.id,
-            name: data.name || 'Unnamed Pet',
-            type: data.type || 'Pet',
-            id_tag: data.id_tag || data.tag_id || '',
-            owner_name: data.owner_name || '',
-          });
+          const cleanTag = String(data.id_tag || data.tag_id || '').trim().toUpperCase();
+          if (cleanTag) {
+            petMap.set(d.id, {
+              id: d.id,
+              name: data.name || 'Unnamed Pet',
+              type: data.type || 'Pet',
+              id_tag: cleanTag,
+              owner_name: data.owner_name || '',
+            });
+          }
         });
         updatePetsList();
       },
@@ -67,18 +70,21 @@ export default function WalkerDashboard() {
       (snapshot) => {
         snapshot.forEach((d) => {
           const data = d.data();
-          const existing = petMap.get(d.id) || {};
-          petMap.set(d.id, {
-            id: d.id,
-            name: data.name || existing.name || 'Unnamed Pet',
-            type: data.type || existing.type || 'Pet',
-            id_tag: data.id_tag || data.tag_id || existing.id_tag || '',
-            owner_name: data.owner_name || existing.owner_name || '',
-          });
+          const cleanTag = String(data.id_tag || data.tag_id || '').trim().toUpperCase();
+          if (cleanTag) {
+            const existing = petMap.get(d.id) || {};
+            petMap.set(d.id, {
+              id: d.id,
+              name: data.name || existing.name || 'Unnamed Pet',
+              type: data.type || existing.type || 'Pet',
+              id_tag: cleanTag,
+              owner_name: data.owner_name || existing.owner_name || '',
+            });
+          }
         });
         updatePetsList();
       },
-      () => console.warn('Direct pets query restricted, relying on public registry.')
+      () => {}
     );
 
     // 3. Fallback: Admin shared configuration document
@@ -89,15 +95,16 @@ export default function WalkerDashboard() {
           const data = docSnap.data();
           if (Array.isArray(data?.pets)) {
             data.pets.forEach((p) => {
-              if (p?.id && !petMap.has(p.id)) {
-                petMap.set(p.id, p);
+              const cleanTag = String(p?.id_tag || '').trim().toUpperCase();
+              if (p?.id && cleanTag && !petMap.has(p.id)) {
+                petMap.set(p.id, { ...p, id_tag: cleanTag });
               }
             });
             updatePetsList();
           }
         }
       },
-      (err) => console.warn('Shared config note:', err)
+      () => {}
     );
 
     return () => {
@@ -109,12 +116,17 @@ export default function WalkerDashboard() {
 
   const activePet = pets.find((p) => p.id === selectedPetId);
   const activeCollarId = useManualTag 
-    ? manualCollarTag.trim() 
-    : (activePet?.id_tag?.trim() || manualCollarTag.trim() || 'COLLAR01');
+    ? String(manualCollarTag || '').trim().toUpperCase() 
+    : (String(activePet?.id_tag || '').trim().toUpperCase() || String(manualCollarTag || '').trim().toUpperCase());
+
+  useEffect(() => {
+    activeCollarIdRef.current = activeCollarId;
+  }, [activeCollarId]);
 
   // Transmit telemetry matching the ESP32 packet schema
   const transmitCollarPacket = async (coords, isLiveWalk = true) => {
-    if (!activeCollarId) {
+    const targetTag = activeCollarIdRef.current;
+    if (!targetTag) {
       toast.error('Please specify a Collar ID Tag.');
       return;
     }
@@ -140,7 +152,7 @@ export default function WalkerDashboard() {
     };
 
     try {
-      await setDoc(doc(db, 'devices', activeCollarId), payload, { merge: true });
+      await setDoc(doc(db, 'devices', targetTag), payload, { merge: true });
       setLastPushedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     } catch (err) {
       console.error('Failed to transmit walker telemetry:', err);
@@ -149,7 +161,8 @@ export default function WalkerDashboard() {
 
   // Toggle Collar Power
   const handleToggleWalkerPower = async () => {
-    if (!activeCollarId) {
+    const targetTag = activeCollarIdRef.current;
+    if (!targetTag) {
       toast.error('Please provide a valid Collar ID Tag.');
       return;
     }
@@ -158,20 +171,20 @@ export default function WalkerDashboard() {
       if (isWalking) handleStopWalk();
       setIsWalkerOnline(false);
 
-      await setDoc(doc(db, 'devices', activeCollarId), {
+      await setDoc(doc(db, 'devices', targetTag), {
         status: 'offline',
         last_updated: new Date(Date.now() - 30000).toISOString(),
       }, { merge: true });
 
-      toast.info(`Collar ${activeCollarId} powered OFF.`);
+      toast.info(`Collar ${targetTag} powered OFF.`);
     } else {
       setIsWalkerOnline(true);
       await transmitCollarPacket(latestCoordsRef.current, false);
-      toast.success(`Collar ${activeCollarId} is now active & ready!`);
+      toast.success(`Collar ${targetTag} is now active & ready!`);
     }
   };
 
-  // Start Live Walk (Actively polls & pushes fresh phone GPS every 10 seconds)
+  // Start Live Walk (Sends current location immediately, then refreshes every 8 seconds)
   const handleStartWalk = () => {
     if (!navigator.geolocation) {
       toast.error('Geolocation is not supported by your browser.');
@@ -183,7 +196,7 @@ export default function WalkerDashboard() {
     }
 
     setIsWalking(true);
-    toast.success('Live walk started! Streaming phone GPS every 10s.');
+    toast.success('Live walk started! Streaming phone GPS every 8s.');
 
     const captureAndTransmitLocation = () => {
       navigator.geolocation.getCurrentPosition(
@@ -204,16 +217,19 @@ export default function WalkerDashboard() {
         },
         {
           enableHighAccuracy: true,
-          timeout: 9000,
-          maximumAge: 0,
+          timeout: 7500,
+          maximumAge: 2000,
         }
       );
     };
 
-    // 1. Initial immediate transmission
+    // 1. Immediately poll and transmit current GPS location to the Owner Dashboard
     captureAndTransmitLocation();
 
-    // 2. Continuous background GPS listener
+    // 2. Hardware GPS watcher to record movement between intervals
+    if (geoWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(geoWatchIdRef.current);
+    }
     geoWatchIdRef.current = navigator.geolocation.watchPosition(
       (pos) => {
         const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
@@ -221,14 +237,14 @@ export default function WalkerDashboard() {
         setLastCoords(c);
       },
       (err) => console.warn('watchPosition update note:', err.message),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 9000 }
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 7500 }
     );
 
-    // 3. Guaranteed 10-second active sampling loop
+    // 3. Continuous 8-second refresh loop
     if (pushIntervalRef.current) clearInterval(pushIntervalRef.current);
     pushIntervalRef.current = setInterval(() => {
       captureAndTransmitLocation();
-    }, 10000);
+    }, 8000);
   };
 
   const handleStopWalk = () => {
@@ -245,8 +261,9 @@ export default function WalkerDashboard() {
   };
 
   const handleTriggerBreach = async () => {
-    if (!activeCollarId) return;
-    await setDoc(doc(db, 'devices', activeCollarId), {
+    const targetTag = activeCollarIdRef.current;
+    if (!targetTag) return;
+    await setDoc(doc(db, 'devices', targetTag), {
       status: 'offline',
       is_breached: true,
       last_updated: new Date().toISOString(),
@@ -328,15 +345,12 @@ export default function WalkerDashboard() {
             >
               {pets.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} ({p.type}) {p.id_tag ? `— Tag: ${p.id_tag}` : '— (No tag assigned)'} {p.owner_name ? `· ${p.owner_name}` : ''}
+                  {p.name} ({p.type}) — Tag: {p.id_tag} {p.owner_name ? `· ${p.owner_name}` : ''}
                 </option>
               ))}
             </select>
             <p className="text-[11px] text-muted mt-1.5">
               Broadcasting as: <span className="font-mono font-bold text-copper">{activeCollarId}</span>
-              {!activePet?.id_tag && (
-                <span className="text-amber-500 ml-1.5 font-medium">(No tag on pet; using fallback {activeCollarId})</span>
-              )}
             </p>
           </div>
         )}
@@ -370,7 +384,7 @@ export default function WalkerDashboard() {
 
         <div>
           <span className="text-xs text-canvas/50 uppercase tracking-widest font-bold block mb-2">
-            Live GPS Sync (Every 10s)
+            Live GPS Sync (Every 8s)
           </span>
           {isWalking ? (
             <Button
